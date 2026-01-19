@@ -1,0 +1,2 @@
+# USBPowerManagement-AutoDisable
+
