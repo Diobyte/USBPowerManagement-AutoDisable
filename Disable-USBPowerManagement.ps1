@@ -73,6 +73,9 @@
 #Requires -RunAsAdministrator
 #Requires -Version 3.0
 
+# Script-level version constant (centralized for easy updates)
+$script:VERSION = "1.4.1"
+
 [CmdletBinding(DefaultParameterSetName = 'Disable', SupportsShouldProcess = $true)]
 param(
     [Parameter(ParameterSetName = 'Disable', HelpMessage = "Generate report only without making changes")]
@@ -166,8 +169,8 @@ $script:TotalDevicesFailed = 0
 $script:ReportOnly = $false
 
 # Ensure we're running in a supported Windows version
-$script:osVersion = [System.Environment]::OSVersion.Version
-if ($script:osVersion.Major -lt 6 -or ($script:osVersion.Major -eq 6 -and $script:osVersion.Minor -lt 1)) {
+$osVersion = [System.Environment]::OSVersion.Version
+if ($osVersion.Major -lt 6 -or ($osVersion.Major -eq 6 -and $osVersion.Minor -lt 1)) {
     Write-Host "This script requires Windows 7 or later (Windows Vista and earlier are not supported)." -ForegroundColor Red
     if ($EnableLogging) {
         try { Stop-Transcript -ErrorAction SilentlyContinue } catch { }
@@ -661,9 +664,10 @@ function Enable-USBPowerManagement {
         $powercfgPath = Join-Path $env:SystemRoot "System32\powercfg.exe"
         if (Test-Path -LiteralPath $powercfgPath) {
             $powerPlans = & $powercfgPath /list 2>&1
-            $planGuids = [regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
+            # Wrap in @() to ensure array even for single power plan (PowerShell 2.0/3.0 compatibility)
+            $planGuids = @([regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
                          ForEach-Object { $_.Groups[1].Value } | 
-                         Select-Object -Unique
+                         Select-Object -Unique)
             
             foreach ($planGuid in $planGuids) {
                 # Enable USB selective suspend (1 = Enabled)
@@ -804,43 +808,53 @@ function Get-USBPowerReport {
         $regPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$instancePath"
         
         # Helper to read power management properties from a Device Parameters path
+        # Returns a hashtable with EnhancedPM and SelectiveSuspend values, or $null if not found
         $readPowerProps = {
             param($paramsPath)
+            $result = @{ Found = $false; EnhancedPM = $null; SelectiveSuspend = $null }
             if (Test-Path -LiteralPath $paramsPath -ErrorAction SilentlyContinue) {
                 $enhancedPM = Get-ItemProperty -LiteralPath $paramsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
                 $selectiveSuspend = Get-ItemProperty -LiteralPath $paramsPath -Name "SelectiveSuspendEnabled" -ErrorAction SilentlyContinue
                 
                 if ($enhancedPM) {
-                    $pmStatus = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
-                    $deviceReport.EnhancedPowerManagement = $pmStatus
-                    Write-Host "   Enhanced Power Management: $pmStatus" -ForegroundColor $(if ($pmStatus -eq "Disabled") { "Green" } else { "Yellow" })
+                    $result.EnhancedPM = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
+                    $result.Found = $true
                 }
                 if ($selectiveSuspend) {
-                    $ssStatus = if ($selectiveSuspend.SelectiveSuspendEnabled -eq 0) { "Disabled" } else { "Enabled" }
-                    $deviceReport.SelectiveSuspend = $ssStatus
-                    Write-Host "   Selective Suspend: $ssStatus" -ForegroundColor $(if ($ssStatus -eq "Disabled") { "Green" } else { "Yellow" })
+                    $result.SelectiveSuspend = if ($selectiveSuspend.SelectiveSuspendEnabled -eq 0) { "Disabled" } else { "Enabled" }
+                    $result.Found = $true
                 }
-                return ($null -ne $enhancedPM -or $null -ne $selectiveSuspend)
             }
-            return $false
+            return $result
         }
         
         # First check direct Device Parameters path
         $directParamsPath = Join-Path -Path $regPath -ChildPath "Device Parameters"
-        $foundSettings = & $readPowerProps $directParamsPath
+        $powerProps = & $readPowerProps $directParamsPath
         
         # Also check subkeys for multi-instance devices (only if not found above)
-        if (-not $foundSettings) {
+        if (-not $powerProps.Found) {
             $subKeys = Get-ChildItem -LiteralPath $regPath -ErrorAction SilentlyContinue
             foreach ($subKey in $subKeys) {
                 # Skip Device Parameters key itself
                 if ($subKey.PSChildName -eq "Device Parameters") { continue }
                 
                 $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
-                if (& $readPowerProps $deviceParamsPath) {
+                $powerProps = & $readPowerProps $deviceParamsPath
+                if ($powerProps.Found) {
                     break  # Found settings, stop searching
                 }
             }
+        }
+        
+        # Update device report with found values and display
+        if ($powerProps.EnhancedPM) {
+            $deviceReport.EnhancedPowerManagement = $powerProps.EnhancedPM
+            Write-Host "   Enhanced Power Management: $($powerProps.EnhancedPM)" -ForegroundColor $(if ($powerProps.EnhancedPM -eq "Disabled") { "Green" } else { "Yellow" })
+        }
+        if ($powerProps.SelectiveSuspend) {
+            $deviceReport.SelectiveSuspend = $powerProps.SelectiveSuspend
+            Write-Host "   Selective Suspend: $($powerProps.SelectiveSuspend)" -ForegroundColor $(if ($powerProps.SelectiveSuspend -eq "Disabled") { "Green" } else { "Yellow" })
         }
         
         $reportData += $deviceReport

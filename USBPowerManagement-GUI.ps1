@@ -4,6 +4,9 @@
     Version: 1.4.1
 #>
 
+# Script-level version constant (centralized for easy updates)
+$script:VERSION = "1.4.1"
+
 # Hide console window when running as EXE
 Add-Type -Name Window -Namespace Console -MemberDefinition '
 [DllImport("Kernel32.dll")]
@@ -54,7 +57,11 @@ $script:USB_DEVICE_PATTERNS = @(
 
 # Helper function to test if a device matches USB patterns (shared across functions)
 function Test-USBDevice {
-    param($Device)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Device
+    )
     
     # Check by PNPDeviceID prefix
     if ($Device.PNPDeviceID -like "USB\*" -or $Device.PNPDeviceID -like "USBSTOR\*") {
@@ -85,7 +92,7 @@ $script:ExportLogButton = $null
 $script:MainForm = $null
 
 # Progress bar phase constants (percentages for each operation phase)
-# Phases are distributed to show smoother progress during the disable operation:
+# Disable operation phases:
 # - Selective Suspend: 0-15% (quick registry operation)
 # - Device Enumeration: 15-60% (main bulk of work, varies by device count)
 # - Hub Configuration: 60-75% (registry sweep)
@@ -95,14 +102,21 @@ $script:MainForm = $null
 $script:PROGRESS_SELECTIVE_SUSPEND = 15
 $script:PROGRESS_DEVICE_ENUM_START = 15
 $script:PROGRESS_DEVICE_ENUM_END = 60
-$script:PROGRESS_RESTORE_PHASE2 = 40
-$script:PROGRESS_DEVICE_ENUM = 60
 $script:PROGRESS_HUB_CONFIG = 75
 $script:PROGRESS_WMI_CONFIG = 85
 $script:PROGRESS_SERVICE_CONFIG = 95
 $script:PROGRESS_COMPLETE = 100
+# Progress bar phases (percentages) - Restore operation
+$script:PROGRESS_RESTORE_PHASE1 = 15   # Selective suspend
+$script:PROGRESS_RESTORE_PHASE2 = 40   # USB device registry
+$script:PROGRESS_RESTORE_PHASE3 = 60   # USBSTOR registry
+$script:PROGRESS_RESTORE_PHASE4 = 95   # Service config
 
 function Test-Administrator {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+    
     try {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -113,7 +127,16 @@ function Test-Administrator {
 }
 
 function Write-Log {
-    param([string]$Message, [string]$Type = "Info")
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Message,
+        
+        [Parameter()]
+        [ValidateSet("Success", "Error", "Warning", "Info")]
+        [string]$Type = "Info"
+    )
     
     if ($null -eq $script:LogTextBox) { return }
     if ([string]::IsNullOrWhiteSpace($Message)) { return }
@@ -135,6 +158,10 @@ function Write-Log {
 }
 
 function Get-USBDevices {
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+    
     $devices = @()
     
     try {
@@ -198,6 +225,9 @@ function Get-USBDevices {
 }
 
 function Disable-USBSelectiveSuspend {
+    [CmdletBinding()]
+    param()
+    
     Write-Log "Disabling USB Selective Suspend in power plans..." "Info"
     
     try {
@@ -241,6 +271,9 @@ function Disable-USBSelectiveSuspend {
 }
 
 function Disable-USBDevicePowerManagement {
+    [CmdletBinding()]
+    param()
+    
     Write-Log "Disabling power management for USB devices..." "Info"
     
     $script:DevicesModified = 0
@@ -281,7 +314,13 @@ function Disable-USBDevicePowerManagement {
         } else {
             $deviceArray = @($allDevices)
         }
-        $totalDevices = [Math]::Max($deviceArray.Count, 1)  # Prevent division by zero
+        
+        if ($deviceArray.Count -eq 0) {
+            Write-Log "No USB devices found to process" "Warning"
+            return
+        }
+        
+        $totalDevices = $deviceArray.Count
         $currentDevice = 0
         
         foreach ($device in $deviceArray) {
@@ -343,6 +382,9 @@ function Disable-USBDevicePowerManagement {
 }
 
 function Set-USBHubPowerManagement {
+    [CmdletBinding()]
+    param()
+    
     Write-Log "Configuring USB Hub settings..." "Info"
     if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_HUB_CONFIG }
     [System.Windows.Forms.Application]::DoEvents()
@@ -375,6 +417,9 @@ function Set-USBHubPowerManagement {
 }
 
 function Disable-DevicePowerManagementPnP {
+    [CmdletBinding()]
+    param()
+    
     Write-Log "Configuring WMI power management..." "Info"
     if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_WMI_CONFIG }
     [System.Windows.Forms.Application]::DoEvents()
@@ -414,12 +459,12 @@ function Disable-DevicePowerManagementPnP {
                             $pm | Set-CimInstance -Property @{ Enable = $false } -ErrorAction Stop
                             $wmiConfigured++
                         } catch {
-                            # Individual device may fail - continue with others
+                            Write-Verbose "WMI power setting failed for device: $($_.Exception.Message)"
                         }
                     }
                 }
             } catch {
-                # Device processing failed - continue with next device
+                Write-Verbose "Device WMI processing failed: $($_.Exception.Message)"
             }
         }
         
@@ -434,6 +479,9 @@ function Disable-DevicePowerManagementPnP {
 }
 
 function Set-USBServicesConfiguration {
+    [CmdletBinding()]
+    param()
+    
     Write-Log "Configuring USB services..." "Info"
     if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_SERVICE_CONFIG }
     [System.Windows.Forms.Application]::DoEvents()
@@ -466,6 +514,9 @@ function Set-USBServicesConfiguration {
 }
 
 function Export-Log {
+    [CmdletBinding()]
+    param()
+    
     $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
     $saveDialog.Filter = "Text files (*.txt)|*.txt|Log files (*.log)|*.log|All files (*.*)|*.*"
     $saveDialog.Title = "Export Activity Log"
@@ -494,8 +545,11 @@ function Export-Log {
 }
 
 function Enable-USBPowerManagement {
+    [CmdletBinding()]
+    param()
+    
     Write-Log "Restoring USB power management to Windows defaults..." "Info"
-    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_SELECTIVE_SUSPEND }
+    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_RESTORE_PHASE1 }
     [System.Windows.Forms.Application]::DoEvents()
     
     try {
@@ -543,7 +597,7 @@ function Enable-USBPowerManagement {
             }
         }
         
-        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_DEVICE_ENUM }
+        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_RESTORE_PHASE3 }
         [System.Windows.Forms.Application]::DoEvents()
         
         # Restore USBSTOR
@@ -564,7 +618,7 @@ function Enable-USBPowerManagement {
             }
         }
         
-        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_SERVICE_CONFIG }
+        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_RESTORE_PHASE4 }
         [System.Windows.Forms.Application]::DoEvents()
         
         # Remove service configuration
@@ -589,30 +643,37 @@ function Enable-USBPowerManagement {
 }
 
 function Start-RestorePowerManagement {
+    [CmdletBinding()]
+    param()
+    
     $script:DisableButton.Enabled = $false
     $script:RefreshButton.Enabled = $false
     $script:RestoreButton.Enabled = $false
     $script:ProgressBar.Value = 0
     $script:LogTextBox.Clear()
     
-    Write-Log "Starting USB Power Management restore..." "Info"
-    Write-Log "Running with Administrator privileges" "Success"
-    
-    Enable-USBPowerManagement
-    
-    $script:ProgressBar.Value = $script:PROGRESS_COMPLETE
-    Write-Log "" "Info"
-    Write-Log "========================================" "Info"
-    Write-Log "Restore complete!" "Success"
-    Write-Log "Windows default power management restored." "Info"
-    Write-Log "A system restart is recommended." "Warning"
-    Write-Log "========================================" "Info"
-    
-    Update-DeviceList
-    
-    $script:DisableButton.Enabled = $true
-    $script:RefreshButton.Enabled = $true
-    $script:RestoreButton.Enabled = $true
+    try {
+        Write-Log "Starting USB Power Management restore..." "Info"
+        Write-Log "Running with Administrator privileges" "Success"
+        
+        Enable-USBPowerManagement
+        
+        $script:ProgressBar.Value = $script:PROGRESS_COMPLETE
+        Write-Log "" "Info"
+        Write-Log "========================================" "Info"
+        Write-Log "Restore complete!" "Success"
+        Write-Log "Windows default power management restored." "Info"
+        Write-Log "A system restart is recommended." "Warning"
+        Write-Log "========================================" "Info"
+        
+        Update-DeviceList
+    }
+    finally {
+        # Always re-enable buttons even if an error occurs
+        $script:DisableButton.Enabled = $true
+        $script:RefreshButton.Enabled = $true
+        $script:RestoreButton.Enabled = $true
+    }
     
     $result = [System.Windows.Forms.MessageBox]::Show(
         "USB Power Management has been restored to Windows defaults.`n`nWould you like to restart your computer now?",
@@ -624,57 +685,82 @@ function Start-RestorePowerManagement {
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
         Write-Log "Restarting computer in 5 seconds..." "Warning"
         [System.Windows.Forms.Application]::DoEvents()
-        Start-Sleep -Seconds 2
-        $script:MainForm.Close()
-        Start-Sleep -Seconds 3
+        
+        # Close form first, then restart - use proper cleanup flow
+        $formClosed = $false
+        try {
+            $script:MainForm.Close()
+            $formClosed = $true
+        } catch {
+            Write-Verbose "Form close failed: $($_.Exception.Message)"
+        }
+        
+        # Delay for form cleanup and user notification
+        Start-Sleep -Seconds 5
+        
         try {
             Restart-Computer -Force -ErrorAction Stop
         }
         catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Failed to restart computer: $($_.Exception.Message)`n`nPlease restart manually.",
-                "Restart Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
+            # If form was closed, we can't show a message box - write to console instead
+            if ($formClosed) {
+                Write-Warning "Failed to restart computer: $($_.Exception.Message). Please restart manually."
+            } else {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Failed to restart computer: $($_.Exception.Message)`n`nPlease restart manually.",
+                    "Restart Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+            }
         }
     }
 }
 
 function Start-DisablePowerManagement {
+    [CmdletBinding()]
+    param()
+    
     $script:DisableButton.Enabled = $false
     $script:RefreshButton.Enabled = $false
     $script:RestoreButton.Enabled = $false
     $script:ProgressBar.Value = 0
     $script:LogTextBox.Clear()
     
-    Write-Log "Starting USB Power Management configuration..." "Info"
-    Write-Log "Running with Administrator privileges" "Success"
-    
-    $script:ProgressBar.Value = $script:PROGRESS_SELECTIVE_SUSPEND
-    Disable-USBSelectiveSuspend
-    
-    Disable-USBDevicePowerManagement
-    
-    Set-USBHubPowerManagement
-    
-    Disable-DevicePowerManagementPnP
-    
-    Set-USBServicesConfiguration
-    
-    $script:ProgressBar.Value = $script:PROGRESS_COMPLETE
-    Write-Log "" "Info"
-    Write-Log "========================================" "Info"
-    Write-Log "Configuration complete!" "Success"
-    Write-Log "Devices modified: $($script:DevicesModified)" "Info"
-    Write-Log "A system restart is recommended." "Warning"
-    Write-Log "========================================" "Info"
-    
-    Update-DeviceList
-    
-    $script:DisableButton.Enabled = $true
-    $script:RefreshButton.Enabled = $true
-    $script:RestoreButton.Enabled = $true
+    try {
+        Write-Log "Starting USB Power Management configuration..." "Info"
+        Write-Log "Running with Administrator privileges" "Success"
+        
+        $script:ProgressBar.Value = $script:PROGRESS_SELECTIVE_SUSPEND
+        Disable-USBSelectiveSuspend
+        
+        Disable-USBDevicePowerManagement
+        
+        Set-USBHubPowerManagement
+        
+        Disable-DevicePowerManagementPnP
+        
+        Set-USBServicesConfiguration
+        
+        $script:ProgressBar.Value = $script:PROGRESS_COMPLETE
+        Write-Log "" "Info"
+        Write-Log "========================================" "Info"
+        Write-Log "Configuration complete!" "Success"
+        Write-Log "Devices modified: $($script:DevicesModified)" "Info"
+        if ($script:DevicesFailed -gt 0) {
+            Write-Log "Devices skipped/failed: $($script:DevicesFailed)" "Warning"
+        }
+        Write-Log "A system restart is recommended." "Warning"
+        Write-Log "========================================" "Info"
+        
+        Update-DeviceList
+    }
+    finally {
+        # Always re-enable buttons even if an error occurs
+        $script:DisableButton.Enabled = $true
+        $script:RefreshButton.Enabled = $true
+        $script:RestoreButton.Enabled = $true
+    }
     
     $result = [System.Windows.Forms.MessageBox]::Show(
         "USB Power Management has been disabled.`n`nWould you like to restart your computer now?",
@@ -686,24 +772,42 @@ function Start-DisablePowerManagement {
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
         Write-Log "Restarting computer in 5 seconds..." "Warning"
         [System.Windows.Forms.Application]::DoEvents()
-        Start-Sleep -Seconds 2
-        $script:MainForm.Close()
-        Start-Sleep -Seconds 3
+        
+        # Close form first, then restart - use proper cleanup flow
+        $formClosed = $false
+        try {
+            $script:MainForm.Close()
+            $formClosed = $true
+        } catch {
+            Write-Verbose "Form close failed: $($_.Exception.Message)"
+        }
+        
+        # Delay for form cleanup and user notification
+        Start-Sleep -Seconds 5
+        
         try {
             Restart-Computer -Force -ErrorAction Stop
         }
         catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Failed to restart computer: $($_.Exception.Message)`n`nPlease restart manually.",
-                "Restart Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
+            # If form was closed, we can't show a message box - write to console instead
+            if ($formClosed) {
+                Write-Warning "Failed to restart computer: $($_.Exception.Message). Please restart manually."
+            } else {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Failed to restart computer: $($_.Exception.Message)`n`nPlease restart manually.",
+                    "Restart Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+            }
         }
     }
 }
 
 function Update-DeviceList {
+    [CmdletBinding()]
+    param()
+    
     if ($null -eq $script:DeviceListView) { return }
     
     $script:DeviceListView.Items.Clear()
@@ -815,7 +919,7 @@ if (-not $isAdmin) {
 
 # Build GUI
 $script:MainForm = New-Object System.Windows.Forms.Form
-$script:MainForm.Text = "USB Power Management Disabler v1.4.1"
+$script:MainForm.Text = "USB Power Management Disabler v$script:VERSION"
 $script:MainForm.Size = New-Object System.Drawing.Size(800, 670)
 $script:MainForm.StartPosition = "CenterScreen"
 $script:MainForm.FormBorderStyle = "FixedSingle"
@@ -950,12 +1054,17 @@ $script:DisableButton.FlatStyle = "Flat"
 $script:DisableButton.Add_Click({ Start-DisablePowerManagement })
 $ButtonPanel.Controls.Add($script:DisableButton)
 
-# Add tooltips
-$tooltip = New-Object System.Windows.Forms.ToolTip
-$tooltip.SetToolTip($script:RestoreButton, "Restore Windows default USB power management settings")
-$tooltip.SetToolTip($script:DisableButton, "Disable power management for all USB devices to prevent disconnections")
-$tooltip.SetToolTip($script:ExportLogButton, "Save the activity log to a file")
-$tooltip.SetToolTip($script:RefreshButton, "Refresh the USB device list")
+# Add tooltips with error handling
+$tooltip = $null
+try {
+    $tooltip = New-Object System.Windows.Forms.ToolTip
+    $tooltip.SetToolTip($script:RestoreButton, "Restore Windows default USB power management settings")
+    $tooltip.SetToolTip($script:DisableButton, "Disable power management for all USB devices to prevent disconnections")
+    $tooltip.SetToolTip($script:ExportLogButton, "Save the activity log to a file")
+    $tooltip.SetToolTip($script:RefreshButton, "Refresh the USB device list")
+} catch {
+    Write-Verbose "Failed to create tooltips: $($_.Exception.Message)"
+}
 
 # Load devices
 Update-DeviceList
@@ -967,7 +1076,9 @@ Update-DeviceList
 # Note: Child controls are automatically disposed when their parent form is disposed
 # We only need to dispose the tooltip (not parented) and the form itself
 try {
-    if ($null -ne $tooltip -and -not $tooltip.IsDisposed) { $tooltip.Dispose() }
+    if ($null -ne $tooltip -and $tooltip -is [System.IDisposable]) { 
+        try { $tooltip.Dispose() } catch { } 
+    }
     if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed) { $script:MainForm.Dispose() }
 } catch {
     # Silently ignore disposal errors during cleanup
