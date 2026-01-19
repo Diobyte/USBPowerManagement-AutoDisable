@@ -6,43 +6,102 @@
     This script performs the following:
     1. Disables USB selective suspend in all power plans
     2. Disables "Allow the computer to turn off this device to save power" for all USB controllers and hubs
+    3. Configures USB service parameters to prevent selective suspend
+    4. Generates a detailed report of USB device power management status
     
-    Compatible with Windows 10 and Windows 11.
+    Compatible with Windows 7, 8, 8.1, 10, and 11.
+
+.EXAMPLE
+    .\Disable-USBPowerManagement.ps1
+    Runs the script and disables all USB power management features.
+
+.EXAMPLE
+    .\Disable-USBPowerManagement.ps1 -ReportOnly
+    Generates a report without making any changes.
+
+.EXAMPLE
+    .\Disable-USBPowerManagement.ps1 -EnableLogging -NoRestartPrompt
+    Runs with logging enabled and skips the restart prompt (useful for automation).
+
+.OUTPUTS
+    None. This script does not return any objects but outputs status messages to the console.
 
 .NOTES
-    Author: PowerShell Script
+    Author: Diobyte
     Requires: Administrator privileges
-    Version: 1.1
+    Version: 1.2.0
     Date: 2026-01-19
     Compatibility: Windows 7/8/8.1/10/11, PowerShell 3.0+
+    License: MIT
+    Repository: https://github.com/Diobyte/USBPowerManagement-AutoDisable
 #>
 
 #Requires -RunAsAdministrator
 #Requires -Version 3.0
 
+[CmdletBinding()]
+param(
+    [Parameter(HelpMessage = "Generate report only without making changes")]
+    [switch]$ReportOnly,
+    
+    [Parameter(HelpMessage = "Skip the restart prompt at the end")]
+    [switch]$NoRestartPrompt,
+    
+    [Parameter(HelpMessage = "Enable transcript logging to file")]
+    [switch]$EnableLogging
+)
+
+# Set strict mode for better error detection
+Set-StrictMode -Version Latest
+
 # Set error handling
 $ErrorActionPreference = "Continue"
 
+# Initialize script-level variables
+$script:TotalDevicesModified = 0
+$script:TotalDevicesFailed = 0
+
 # Ensure we're running in a supported Windows version
-$osVersion = [System.Environment]::OSVersion.Version
-if ($osVersion.Major -lt 6 -or ($osVersion.Major -eq 6 -and $osVersion.Minor -lt 1)) {
+$script:osVersion = [System.Environment]::OSVersion.Version
+if ($script:osVersion.Major -lt 6 -or ($script:osVersion.Major -eq 6 -and $script:osVersion.Minor -lt 1)) {
     Write-Host "This script requires Windows 7 or later." -ForegroundColor Red
     exit 1
 }
 
-# Function to write colored output
+# Start transcript logging if enabled
+if ($EnableLogging) {
+    $logPath = Join-Path $PSScriptRoot "USBPowerManagement_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    try {
+        Start-Transcript -Path $logPath -ErrorAction Stop
+        Write-Host "Logging enabled: $logPath" -ForegroundColor Gray
+    }
+    catch {
+        Write-Host "Warning: Could not start transcript logging: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Function to write colored output with proper formatting
 function Write-Status {
+    [CmdletBinding()]
     param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Message,
+        
+        [Parameter()]
+        [ValidateSet("Success", "Error", "Warning", "Info", "Debug")]
         [string]$Type = "Info"
     )
     
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $formattedMessage = "[$timestamp] [$($Type.ToUpper())] $Message"
+    
     switch ($Type) {
-        "Success" { Write-Host "[$timestamp] [SUCCESS] $Message" -ForegroundColor Green }
-        "Error"   { Write-Host "[$timestamp] [ERROR] $Message" -ForegroundColor Red }
-        "Warning" { Write-Host "[$timestamp] [WARNING] $Message" -ForegroundColor Yellow }
-        "Info"    { Write-Host "[$timestamp] [INFO] $Message" -ForegroundColor Cyan }
+        "Success" { Write-Host $formattedMessage -ForegroundColor Green }
+        "Error"   { Write-Host $formattedMessage -ForegroundColor Red }
+        "Warning" { Write-Host $formattedMessage -ForegroundColor Yellow }
+        "Info"    { Write-Host $formattedMessage -ForegroundColor Cyan }
+        "Debug"   { Write-Verbose $formattedMessage }
     }
 }
 
@@ -82,12 +141,20 @@ function Get-WindowsVersion {
 
 # Function to disable USB Selective Suspend in all power plans
 function Disable-USBSelectiveSuspend {
+    [CmdletBinding()]
+    param()
+    
     Write-Status "Disabling USB Selective Suspend in all power plans..." "Info"
+    
+    if ($script:ReportOnly) {
+        Write-Status "Report-only mode: Skipping power plan modifications" "Info"
+        return
+    }
     
     try {
         # Check if powercfg exists
         $powercfgPath = Join-Path $env:SystemRoot "System32\powercfg.exe"
-        if (-not (Test-Path $powercfgPath)) {
+        if (-not (Test-Path -LiteralPath $powercfgPath)) {
             Write-Status "powercfg.exe not found. Skipping power plan configuration." "Warning"
             return
         }
@@ -144,7 +211,15 @@ function Disable-USBSelectiveSuspend {
 
 # Function to disable power management for USB devices via registry
 function Disable-USBDevicePowerManagement {
+    [CmdletBinding()]
+    param()
+    
     Write-Status "Disabling power management for all USB devices..." "Info"
+    
+    if ($script:ReportOnly) {
+        Write-Status "Report-only mode: Skipping device power management modifications" "Info"
+        return
+    }
     
     $devicesModified = 0
     $devicesFailed = 0
@@ -183,7 +258,13 @@ function Disable-USBDevicePowerManagement {
             }
         }
         
-        Write-Status "Found $($allDevices.Count) USB-related devices" "Info"
+        $deviceCount = if ($null -eq $allDevices) { 0 } else { @($allDevices).Count }
+        Write-Status "Found $deviceCount USB-related devices" "Info"
+        
+        if ($null -eq $allDevices -or $deviceCount -eq 0) {
+            Write-Status "No USB devices found to process" "Warning"
+            return
+        }
         
         foreach ($device in $allDevices) {
             $deviceId = $device.PNPDeviceID
@@ -194,15 +275,6 @@ function Disable-USBDevicePowerManagement {
             }
             
             Write-Status "Processing: $deviceName" "Info"
-            
-            # Convert device ID to registry path format
-            $registryDeviceId = $deviceId -replace '\\', '#'
-            
-            # Search for the device in the registry
-            $registryPaths = @(
-                "HKLM:\SYSTEM\CurrentControlSet\Enum\$deviceId\Device Parameters",
-                "HKLM:\SYSTEM\CurrentControlSet\Enum\$deviceId"
-            )
             
             $deviceKeyFound = $false
             
@@ -270,6 +342,8 @@ function Disable-USBDevicePowerManagement {
         }
         
         Write-Status "Registry modifications complete. Modified: $devicesModified, Skipped/Failed: $devicesFailed" "Info"
+        $script:TotalDevicesModified += $devicesModified
+        $script:TotalDevicesFailed += $devicesFailed
     }
     catch {
         Write-Status "Error during registry modifications: $($_.Exception.Message)" "Error"
@@ -278,7 +352,15 @@ function Disable-USBDevicePowerManagement {
 
 # Function to disable power management using Device Manager properties (PnPUtil method)
 function Disable-DevicePowerManagementPnP {
+    [CmdletBinding()]
+    param()
+    
     Write-Status "Disabling power management via PnP device properties..." "Info"
+    
+    if ($script:ReportOnly) {
+        Write-Status "Report-only mode: Skipping PnP power management modifications" "Info"
+        return
+    }
     
     try {
         # Check if Get-PnpDevice cmdlet is available (may not be on older systems)
@@ -356,7 +438,15 @@ function Disable-DevicePowerManagementPnP {
 
 # Function to modify USB hub power management directly
 function Disable-USBHubPowerManagement {
+    [CmdletBinding()]
+    param()
+    
     Write-Status "Configuring USB Hub specific power management..." "Info"
+    
+    if ($script:ReportOnly) {
+        Write-Status "Report-only mode: Skipping USB Hub modifications" "Info"
+        return
+    }
     
     try {
         # Find all USB hubs and root hubs in registry
@@ -413,7 +503,15 @@ function Disable-USBHubPowerManagement {
 
 # Function to disable USB power management via services
 function Set-USBServicesConfiguration {
+    [CmdletBinding()]
+    param()
+    
     Write-Status "Configuring USB-related service settings..." "Info"
+    
+    if ($script:ReportOnly) {
+        Write-Status "Report-only mode: Skipping USB service modifications" "Info"
+        return
+    }
     
     try {
         # List of all possible USB service paths to configure
@@ -455,6 +553,9 @@ function Set-USBServicesConfiguration {
 
 # Function to generate report of USB devices and their power status
 function Get-USBPowerReport {
+    [CmdletBinding()]
+    param()
+    
     Write-Status "Generating USB device power management report..." "Info"
     
     Write-Host ("`n" + ("=" * 80)) -ForegroundColor Cyan
@@ -522,9 +623,19 @@ function Get-USBPowerReport {
 
 # Main execution
 function Main {
+    [CmdletBinding()]
+    param()
+    
+    # Store parameters at script level for use in functions
+    $script:ReportOnly = $ReportOnly
+    
     Write-Host ("`n" + ("=" * 80)) -ForegroundColor Cyan
     Write-Host "USB POWER MANAGEMENT CONFIGURATION SCRIPT" -ForegroundColor Cyan
-    Write-Host "Disabling 'Allow computer to turn off device to save power'" -ForegroundColor Cyan
+    if ($ReportOnly) {
+        Write-Host "Mode: REPORT ONLY (No changes will be made)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Disabling 'Allow computer to turn off device to save power'" -ForegroundColor Cyan
+    }
     Write-Host ("=" * 80) -ForegroundColor Cyan
     Write-Host ""
     
@@ -538,8 +649,8 @@ function Main {
     
     Write-Status "Running with Administrator privileges" "Success"
     
-    # Get Windows version info
-    $winVersion = Get-WindowsVersion
+    # Display Windows version info
+    Get-WindowsVersion | Out-Null
     Write-Host ""
     
     # Step 1: Disable USB Selective Suspend in power plans
@@ -567,32 +678,48 @@ function Main {
     
     Write-Host ""
     Write-Host ("=" * 80) -ForegroundColor Green
-    Write-Status "USB Power Management configuration complete!" "Success"
-    Write-Status "A system restart is recommended for all changes to take effect." "Warning"
+    if ($ReportOnly) {
+        Write-Status "USB Power Management report complete!" "Success"
+        Write-Status "No changes were made (report-only mode)." "Info"
+    } else {
+        Write-Status "USB Power Management configuration complete!" "Success"
+        Write-Status "Devices modified: $script:TotalDevicesModified" "Info"
+        if ($script:TotalDevicesFailed -gt 0) {
+            Write-Status "Devices skipped/failed: $script:TotalDevicesFailed" "Warning"
+        }
+        Write-Status "A system restart is recommended for all changes to take effect." "Warning"
+    }
     Write-Host ("=" * 80) -ForegroundColor Green
     Write-Host ""
     
-    # Prompt for restart
-    Write-Host ""
-    try {
-        # Check if running in interactive mode
-        if ([Environment]::UserInteractive) {
-            $restart = Read-Host "Would you like to restart the computer now? (Y/N)"
-            if ($restart -eq 'Y' -or $restart -eq 'y') {
-                Write-Status "Restarting computer in 10 seconds... Press Ctrl+C to cancel." "Warning"
-                Start-Sleep -Seconds 10
-                Restart-Computer -Force
+    # Prompt for restart (only if changes were made)
+    if (-not $ReportOnly -and -not $NoRestartPrompt) {
+        try {
+            # Check if running in interactive mode (exclude ISE, VS Code, and other non-console hosts)
+            $nonInteractiveHosts = 'ISE|Code|ServerRemoteHost|integratedConsoleHost'
+            if ([Environment]::UserInteractive -and $Host.Name -notmatch $nonInteractiveHosts -and [Console]::IsInputRedirected -eq $false) {
+                $restart = Read-Host "Would you like to restart the computer now? (Y/N)"
+                if ($restart -eq 'Y' -or $restart -eq 'y') {
+                    Write-Status "Restarting computer in 10 seconds... Press Ctrl+C to cancel." "Warning"
+                    Start-Sleep -Seconds 10
+                    Restart-Computer -Force
+                }
+                else {
+                    Write-Status "Please remember to restart your computer for all changes to take full effect." "Info"
+                }
             }
             else {
-                Write-Status "Please remember to restart your computer for all changes to take full effect." "Info"
+                Write-Status "Running in non-interactive mode. Please restart manually for changes to take effect." "Info"
             }
         }
-        else {
-            Write-Status "Running in non-interactive mode. Please restart manually for changes to take effect." "Info"
+        catch {
+            Write-Status "Please restart your computer manually for all changes to take full effect." "Info"
         }
     }
-    catch {
-        Write-Status "Please restart your computer manually for all changes to take full effect." "Info"
+    
+    # Stop transcript if it was started
+    if ($EnableLogging) {
+        try { Stop-Transcript -ErrorAction SilentlyContinue } catch { }
     }
 }
 

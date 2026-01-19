@@ -1,0 +1,126 @@
+name: Bug Report
+description: Report a bug or issue with the USB Power Management script
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the form below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: windows-version
+    attributes:
+      label: Windows Version
+      description: What version of Windows are you running?
+      options:
+        - Windows 11 (24H2)
+        - Windows 11 (23H2)
+        - Windows 11 (22H2)
+        - Windows 11 (21H2)
+        - Windows 10 (22H2)
+        - Windows 10 (21H2)
+        - Windows 10 (older)
+        - Windows 8.1
+        - Windows 8
+        - Windows 7
+    validations:
+      required: true
+
+  - type: dropdown
+    id: powershell-version
+    attributes:
+      label: PowerShell Version
+      description: Run `$PSVersionTable.PSVersion` to check
+      options:
+        - PowerShell 7.x
+        - PowerShell 5.1
+        - PowerShell 5.0
+        - PowerShell 4.0
+        - PowerShell 3.0
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: System Architecture
+      options:
+        - x64 (64-bit)
+        - x86 (32-bit)
+        - ARM64
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Download the script
+        2. Run as administrator
+        3. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error Messages
+      description: Paste any error messages here (use code formatting)
+      render: powershell
+
+  - type: dropdown
+    id: launch-method
+    attributes:
+      label: How did you run the script?
+      options:
+        - Double-clicked the .bat file
+        - Ran PowerShell script directly
+        - One-line command
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or information about the problem here.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I ran the script as Administrator
+          required: true
+        - label: I have searched existing issues for duplicates
+          required: true

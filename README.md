@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PowerShell](https://img.shields.io/badge/PowerShell-3.0%2B-blue.svg)](https://docs.microsoft.com/en-us/powershell/)
-[![Windows](https://img.shields.io/badge/Windows-7%20%7C%208%20%7C%2010%20%7C%2011-0078D6.svg)](https://www.microsoft.com/windows)
+[![Windows](https://img.shields.io/badge/Windows-7%20%7C%208%20%7C%208.1%20%7C%2010%20%7C%2011-0078D6.svg)](https://www.microsoft.com/windows)
 
 A comprehensive PowerShell script to disable Windows USB power management settings, preventing USB devices from being turned off to save power.
 
@@ -63,6 +63,32 @@ Run in an elevated PowerShell:
 Set-ExecutionPolicy Bypass -Scope Process -Force; .\Disable-USBPowerManagement.ps1
 ```
 
+### Advanced Usage
+
+> 💡 **Tip:** Run with `-ReportOnly` first to see what changes will be made without modifying your system.
+
+The script supports several parameters for advanced use cases:
+
+```powershell
+# Generate a report without making any changes (recommended to run first)
+.\Disable-USBPowerManagement.ps1 -ReportOnly
+
+# Run without the restart prompt (useful for automation)
+.\Disable-USBPowerManagement.ps1 -NoRestartPrompt
+
+# Enable logging to a timestamped file
+.\Disable-USBPowerManagement.ps1 -EnableLogging
+
+# Combine parameters
+.\Disable-USBPowerManagement.ps1 -NoRestartPrompt -EnableLogging
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `-ReportOnly` | Generate a report of USB power management status without making changes |
+| `-NoRestartPrompt` | Skip the restart prompt at the end of execution |
+| `-EnableLogging` | Save output to a timestamped log file in the script directory |
+
 ## 📁 Files
 
 | File | Description |
@@ -73,6 +99,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; .\Disable-USBPowerManagement.p
 | `LICENSE` | MIT License |
 | `CHANGELOG.md` | Version history |
 | `CONTRIBUTING.md` | Contribution guidelines |
+| `SECURITY.md` | Security policy |
 
 ## 🔧 What the Script Does
 

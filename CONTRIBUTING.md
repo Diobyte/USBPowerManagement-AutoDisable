@@ -45,34 +45,31 @@ When creating a bug report, please include:
    - Any relevant system configuration
 
 **Bug Report Template:**
-```markdown
-## Bug Description
-A clear description of what the bug is.
 
-## System Information
-- Windows Version: 
-- PowerShell Version: 
-- Architecture: 
-
-## Steps to Reproduce
-1. 
-2. 
-3. 
-
-## Expected Behavior
-What you expected to happen.
-
-## Actual Behavior
-What actually happened.
-
-## Error Messages
-```
-Paste any error messages here
-```
-
-## Additional Context
-Any other relevant information.
-```
+> **Bug Description**  
+> A clear description of what the bug is.
+>
+> **System Information**  
+> - Windows Version:  
+> - PowerShell Version:  
+> - Architecture:  
+>
+> **Steps to Reproduce**  
+> 1.  
+> 2.  
+> 3.  
+>
+> **Expected Behavior**  
+> What you expected to happen.
+>
+> **Actual Behavior**  
+> What actually happened.
+>
+> **Error Messages**  
+> Paste any error messages here
+>
+> **Additional Context**  
+> Any other relevant information.
 
 ### Suggesting Enhancements
 
@@ -189,6 +186,9 @@ Get-Item -Path $path -ErrorAction SilentlyContinue
 .EXAMPLE
     Example-Function -Parameter "Value"
     Description of what this example does.
+
+.OUTPUTS
+    Describe what the function returns.
 #>
 function Example-Function {
     # Function body

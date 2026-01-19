@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-01-19
+
+### Added
+- `-ReportOnly` parameter to generate status report without making changes
+- `-NoRestartPrompt` parameter to skip the restart confirmation
+- `-EnableLogging` parameter for transcript logging to file
+- Script-level device modification tracking and summary
+- `[CmdletBinding()]` attribute to all functions for better PowerShell integration
+- Strict mode (`Set-StrictMode -Version Latest`) for improved code quality
+- PowerShell availability check in batch launcher
+- UTF-8 code page support in batch launcher
+- ISE detection to avoid restart prompt issues
+
+### Changed
+- Improved parameter validation with `[ValidateSet()]` attributes
+- Enhanced `Write-Status` function with proper CmdletBinding
+- Better interactive mode detection for restart prompt
+- Registry path checks now use `-LiteralPath` where appropriate
+- More informative completion summary with device counts
+
+### Fixed
+- Potential issues with PowerShell ISE environment
+- Improved error handling in transcript logging
+
 ## [1.1.0] - 2026-01-19
 
 ### Added
@@ -46,10 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.2.0 | 2026-01-19 | Advanced parameters and improved code quality |
 | 1.1.0 | 2026-01-19 | Enhanced compatibility and features |
 | 1.0.0 | 2026-01-15 | Initial release |
 
 ## Upgrade Notes
+
+### Upgrading to 1.2.0
+
+No action required. The new parameters (`-ReportOnly`, `-NoRestartPrompt`, `-EnableLogging`) are optional and backward compatible.
 
 ### Upgrading to 1.1.0
 
