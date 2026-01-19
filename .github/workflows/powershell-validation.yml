@@ -21,7 +21,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run PSScriptAnalyzer
         shell: pwsh
@@ -45,7 +45,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Validate PowerShell Syntax
         shell: pwsh
@@ -79,7 +79,7 @@ jobs:
         powershell: ['5.1', '7.x']
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test PowerShell ${{ matrix.powershell }} Compatibility
         shell: pwsh
@@ -116,7 +116,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run Pester Tests
         shell: pwsh
