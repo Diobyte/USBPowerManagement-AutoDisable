@@ -10,6 +10,9 @@ setlocal EnableDelayedExpansion
 
 title Building USB Power Management GUI...
 
+:: Change to script directory first
+CD /D "%~dp0"
+
 echo.
 echo ============================================================
 echo   USB Power Management GUI - EXE Builder
@@ -19,28 +22,16 @@ echo.
 :: Check for admin using modern method (net session)
 >nul 2>&1 net session
 if %errorlevel% NEQ 0 (
-    echo Requesting Administrator privileges...
-    set "_vbsFile=%temp%\getadmin_%RANDOM%%RANDOM%.vbs"
-    echo Set UAC = CreateObject^("Shell.Application"^) > "!_vbsFile!"
-    if not exist "!_vbsFile!" (
-        echo Failed to create elevation script. Check temp folder permissions.
-        pause
-        exit /B 1
-    )
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "!_vbsFile!"
-    cscript //nologo "!_vbsFile!" 2>nul
-    set "_exitCode=!errorlevel!"
-    del /q "!_vbsFile!" >nul 2>&1
-    if !_exitCode! NEQ 0 (
-        echo Failed to request elevation. Please run as Administrator manually.
-        pause
-        exit /B 1
-    )
-    exit /B 0
+    echo This script requires Administrator privileges.
+    echo.
+    echo Right-click on this file and select "Run as administrator"
+    echo.
+    pause
+    exit /B 1
 )
 
-pushd "%CD%"
-CD /D "%~dp0"
+echo Running with Administrator privileges...
+echo.
 
 echo Checking for NuGet provider and PS2EXE module...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -61,10 +52,10 @@ echo Building EXE...
 echo.
 
 :: Delete old EXE to ensure we can detect build failures properly
-if exist "%~dp0USBPowerManagement-GUI.exe" del /q "%~dp0USBPowerManagement-GUI.exe" >nul 2>&1
+if exist "USBPowerManagement-GUI.exe" del /q "USBPowerManagement-GUI.exe" >nul 2>&1
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$ErrorActionPreference = 'Stop'; try { Invoke-PS2EXE -InputFile '%~dp0USBPowerManagement-GUI.ps1' -OutputFile '%~dp0USBPowerManagement-GUI.exe' -NoConsole -RequireAdmin -Title 'USB Power Management Disabler' -Description 'Disable USB power management to prevent device disconnections' -Company 'Diobyte' -Product 'USB Power Management Disabler' -Version '1.4.1.0' -Copyright '(c) 2026 Diobyte'; exit 0 } catch { Write-Host ('Build error: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
+    "Import-Module ps2exe; $ErrorActionPreference = 'Stop'; try { Invoke-PS2EXE -InputFile 'USBPowerManagement-GUI.ps1' -OutputFile 'USBPowerManagement-GUI.exe' -NoConsole -RequireAdmin -Title 'USB Power Management Disabler' -Description 'Disable USB power management to prevent device disconnections' -Company 'Diobyte' -Product 'USB Power Management Disabler' -Version '1.4.1.0' -Copyright '(c) 2026 Diobyte'; exit 0 } catch { Write-Host ('Build error: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
 
 set BUILD_EXIT_CODE=%errorlevel%
 
@@ -76,14 +67,13 @@ if %BUILD_EXIT_CODE% NEQ 0 (
     echo   Check the error messages above.
     echo ============================================================
     echo.
-    popd
     pause
     exit /B 1
 )
 
-if exist "%~dp0USBPowerManagement-GUI.exe" (
+if exist "USBPowerManagement-GUI.exe" (
     :: Verify file size is greater than 0
-    for %%A in ("%~dp0USBPowerManagement-GUI.exe") do (
+    for %%A in ("USBPowerManagement-GUI.exe") do (
         if %%~zA GTR 0 (
             echo.
             echo ============================================================
@@ -97,7 +87,10 @@ if exist "%~dp0USBPowerManagement-GUI.exe" (
             echo   BUILD FAILED
             echo   Output file is empty ^(0 bytes^).
             echo ============================================================
-            del /q "%~dp0USBPowerManagement-GUI.exe" >nul 2>&1
+            del /q "USBPowerManagement-GUI.exe" >nul 2>&1
+            echo.
+            pause
+            exit /B 1
         )
     )
 ) else (
@@ -107,8 +100,10 @@ if exist "%~dp0USBPowerManagement-GUI.exe" (
     echo   Output file was not created.
     echo   Check the error messages above.
     echo ============================================================
+    echo.
+    pause
+    exit /B 1
 )
 
 echo.
-popd
 pause

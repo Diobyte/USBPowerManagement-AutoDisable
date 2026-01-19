@@ -25,25 +25,20 @@ if %errorlevel% NEQ 0 (
 
 :UACPrompt
     set "_vbsFile=%temp%\getadmin_%RANDOM%%RANDOM%.vbs"
+    set "_batchFile=%~f0"
+    set "_batchDir=%~dp0"
     echo Set UAC = CreateObject^("Shell.Application"^) > "!_vbsFile!"
     if not exist "!_vbsFile!" (
         echo Failed to create elevation script. Check temp folder permissions.
         pause
         exit /B 1
     )
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "!_vbsFile!"
+    echo UAC.ShellExecute "!_batchFile!", "", "!_batchDir!", "runas", 1 >> "!_vbsFile!"
     cscript //nologo "!_vbsFile!" 2>nul
-    set "_exitCode=!errorlevel!"
     del /q "!_vbsFile!" >nul 2>&1
-    if !_exitCode! NEQ 0 (
-        echo Failed to request elevation. Please run as Administrator manually.
-        pause
-        exit /B 1
-    )
     exit /B 0
 
 :gotAdmin
-    pushd "%CD%"
     CD /D "%~dp0"
 
 :: Verify PowerShell script exists
@@ -55,7 +50,6 @@ if not exist "%~dp0Disable-USBPowerManagement.ps1" (
     echo ============================================================
     echo.
     pause
-    popd
     exit /B 1
 )
 
@@ -69,7 +63,6 @@ if %errorlevel% NEQ 0 (
     echo ============================================================
     echo.
     pause
-    popd
     exit /B 1
 )
 
@@ -107,5 +100,4 @@ if %SCRIPT_EXIT_CODE% EQU 0 (
     echo ============================================================
 )
 pause >nul
-popd
 exit /B %SCRIPT_EXIT_CODE%

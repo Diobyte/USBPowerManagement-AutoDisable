@@ -25,25 +25,20 @@ if %errorlevel% NEQ 0 (
 
 :UACPrompt
     set "_vbsFile=%temp%\getadmin_%RANDOM%%RANDOM%.vbs"
+    set "_batchFile=%~f0"
+    set "_batchDir=%~dp0"
     echo Set UAC = CreateObject^("Shell.Application"^) > "!_vbsFile!"
     if not exist "!_vbsFile!" (
         echo Failed to create elevation script. Check temp folder permissions.
         pause
         exit /B 1
     )
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "!_vbsFile!"
+    echo UAC.ShellExecute "!_batchFile!", "", "!_batchDir!", "runas", 1 >> "!_vbsFile!"
     cscript //nologo "!_vbsFile!" 2>nul
-    set "_exitCode=!errorlevel!"
     del /q "!_vbsFile!" >nul 2>&1
-    if !_exitCode! NEQ 0 (
-        echo Failed to request elevation. Please run as Administrator manually.
-        pause
-        exit /B 1
-    )
     exit /B 0
 
 :gotAdmin
-    pushd "%CD%"
     CD /D "%~dp0"
 
 :: Check if EXE version exists, use it preferentially
@@ -53,7 +48,6 @@ if exist "%~dp0USBPowerManagement-GUI.exe" (
         echo EXE failed to run, trying PowerShell script...
         goto TryPowerShell
     )
-    popd
     exit /B 0
 )
 
@@ -61,7 +55,6 @@ if exist "%~dp0USBPowerManagement-GUI.exe" (
 :: Fall back to PowerShell script
 if exist "%~dp0USBPowerManagement-GUI.ps1" (
     powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0USBPowerManagement-GUI.ps1"
-    popd
     exit /B 0
 )
 
@@ -73,5 +66,4 @@ echo   Please ensure USBPowerManagement-GUI.ps1 or .exe exists.
 echo ============================================================
 echo.
 pause
-popd
 exit /B 1
