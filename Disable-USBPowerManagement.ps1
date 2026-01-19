@@ -396,9 +396,7 @@ function Disable-USBDevicePowerManagement {
             return
         }
         
-        $processedCount = 0
         foreach ($device in $allDevices) {
-            $processedCount++
             $deviceId = $device.PNPDeviceID
             $deviceName = if (-not [string]::IsNullOrWhiteSpace($device.Name)) { $device.Name } else { "Unknown Device" }
             
@@ -906,7 +904,8 @@ function Main {
     [CmdletBinding()]
     param()
     
-    # Store parameters at script level for use in functions
+    # Copy parameter to script scope so child functions (Disable-USBSelectiveSuspend, etc.)
+    # can check if we're in report-only mode without needing parameter passing
     $script:ReportOnly = $ReportOnly
     
     Write-Host ("`n" + ("=" * 80)) -ForegroundColor Cyan

@@ -52,6 +52,25 @@ $script:USB_DEVICE_PATTERNS = @(
     "*Universal Host Controller*"
 )
 
+# Helper function to test if a device matches USB patterns (shared across functions)
+function Test-USBDevice {
+    param($Device)
+    
+    # Check by PNPDeviceID prefix
+    if ($Device.PNPDeviceID -like "USB\*" -or $Device.PNPDeviceID -like "USBSTOR\*") {
+        return $true
+    }
+    
+    # Check by device name patterns
+    foreach ($pattern in $script:USB_DEVICE_PATTERNS) {
+        if ($Device.Name -like $pattern) {
+            return $true
+        }
+    }
+    
+    return $false
+}
+
 # Global variables
 $script:DevicesModified = 0
 $script:DevicesFailed = 0
@@ -66,12 +85,21 @@ $script:ExportLogButton = $null
 $script:MainForm = $null
 
 # Progress bar phase constants (percentages for each operation phase)
-$script:PROGRESS_SELECTIVE_SUSPEND = 10
+# Phases are distributed to show smoother progress during the disable operation:
+# - Selective Suspend: 0-15% (quick registry operation)
+# - Device Enumeration: 15-60% (main bulk of work, varies by device count)
+# - Hub Configuration: 60-75% (registry sweep)
+# - WMI Configuration: 75-85% (optional, may skip on some systems)
+# - Service Configuration: 85-95% (registry operations)
+# - Complete: 100%
+$script:PROGRESS_SELECTIVE_SUSPEND = 15
+$script:PROGRESS_DEVICE_ENUM_START = 15
+$script:PROGRESS_DEVICE_ENUM_END = 60
 $script:PROGRESS_RESTORE_PHASE2 = 40
-$script:PROGRESS_DEVICE_ENUM = 70
+$script:PROGRESS_DEVICE_ENUM = 60
 $script:PROGRESS_HUB_CONFIG = 75
-$script:PROGRESS_WMI_CONFIG = 80
-$script:PROGRESS_SERVICE_CONFIG = 85
+$script:PROGRESS_WMI_CONFIG = 85
+$script:PROGRESS_SERVICE_CONFIG = 95
 $script:PROGRESS_COMPLETE = 100
 
 function Test-Administrator {
@@ -109,25 +137,15 @@ function Write-Log {
 function Get-USBDevices {
     $devices = @()
     
-    # Helper function to test if device matches USB patterns
-    $matchesUSBPattern = {
-        param($device)
-        if ($device.PNPDeviceID -like "USB\*" -or $device.PNPDeviceID -like "USBSTOR\*") { return $true }
-        foreach ($pattern in $script:USB_DEVICE_PATTERNS) {
-            if ($device.Name -like $pattern) { return $true }
-        }
-        return $false
-    }
-    
     try {
         # Try CIM first (modern), fallback to WMI (legacy) for compatibility
         try {
-            $pnpDevices = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object { & $matchesUSBPattern $_ }
+            $pnpDevices = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object { Test-USBDevice $_ }
         }
         catch {
             # Fallback to WMI for older systems or if CIM fails
             Write-Verbose "CIM query failed, falling back to WMI: $($_.Exception.Message)"
-            $pnpDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { & $matchesUSBPattern $_ }
+            $pnpDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { Test-USBDevice $_ }
         }
         
         foreach ($device in $pnpDevices) {
@@ -196,10 +214,11 @@ function Disable-USBSelectiveSuspend {
             return
         }
         
-        $planGuids = [regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
-                     ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+        # Wrap in @() to ensure array even for single result
+        $planGuids = @([regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
+                     ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
         
-        if ($null -eq $planGuids -or @($planGuids).Count -eq 0) {
+        if ($planGuids.Count -eq 0) {
             Write-Log "No power plans found" "Warning"
             return
         }
@@ -209,8 +228,9 @@ function Disable-USBSelectiveSuspend {
             & $powercfgPath /setdcvalueindex $planGuid $script:USB_SETTINGS_GUID $script:USB_SELECTIVE_SUSPEND_GUID 0 2>&1 | Out-Null
         }
         
+        # Reactivate current power plan to apply changes
         $activePlan = & $powercfgPath /getactivescheme 2>&1
-        if ($activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
+        if ($null -ne $activePlan -and $activePlan -is [string] -and $activePlan -match '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') {
             & $powercfgPath /setactive $matches[1] 2>&1 | Out-Null
         }
         
@@ -225,16 +245,6 @@ function Disable-USBDevicePowerManagement {
     
     $script:DevicesModified = 0
     $script:DevicesFailed = 0
-    
-    # Helper function to test if device matches USB patterns
-    $matchesUSBPattern = {
-        param($device)
-        if ($device.PNPDeviceID -like "USB\*" -or $device.PNPDeviceID -like "USBSTOR\*") { return $true }
-        foreach ($pattern in $script:USB_DEVICE_PATTERNS) {
-            if ($device.Name -like $pattern) { return $true }
-        }
-        return $false
-    }
     
     # Helper function to set power management properties on a registry path
     $setDevicePowerParams = {
@@ -259,10 +269,10 @@ function Disable-USBDevicePowerManagement {
         # Try CIM first, fallback to WMI for compatibility
         $allDevices = $null
         try {
-            $allDevices = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object { & $matchesUSBPattern $_ }
+            $allDevices = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object { Test-USBDevice $_ }
         }
         catch {
-            $allDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { & $matchesUSBPattern $_ }
+            $allDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { Test-USBDevice $_ }
         }
         
         # Ensure we have a valid array even if queries returned null
@@ -277,7 +287,10 @@ function Disable-USBDevicePowerManagement {
         foreach ($device in $deviceArray) {
             $currentDevice++
             if ($null -ne $script:ProgressBar) {
-                $script:ProgressBar.Value = [math]::Min(($currentDevice / $totalDevices) * $script:PROGRESS_DEVICE_ENUM, $script:PROGRESS_DEVICE_ENUM)
+                # Calculate progress within the device enumeration phase range (15-60%)
+                $phaseProgress = ($currentDevice / $totalDevices)
+                $progressValue = $script:PROGRESS_DEVICE_ENUM_START + ($phaseProgress * ($script:PROGRESS_DEVICE_ENUM_END - $script:PROGRESS_DEVICE_ENUM_START))
+                $script:ProgressBar.Value = [math]::Min([int]$progressValue, $script:PROGRESS_DEVICE_ENUM_END)
             }
             [System.Windows.Forms.Application]::DoEvents()
             
@@ -492,8 +505,9 @@ function Enable-USBPowerManagement {
         $powercfgPath = Join-Path $env:SystemRoot "System32\powercfg.exe"
         if (Test-Path -LiteralPath $powercfgPath) {
             $powerPlans = & $powercfgPath /list 2>&1
-            $planGuids = [regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
-                         ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+            # Wrap in @() to ensure array even for single result
+            $planGuids = @([regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
+                         ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
             
             foreach ($planGuid in $planGuids) {
                 & $powercfgPath /setacvalueindex $planGuid $script:USB_SETTINGS_GUID $script:USB_SELECTIVE_SUSPEND_GUID 1 2>&1 | Out-Null
@@ -953,8 +967,8 @@ Update-DeviceList
 # Note: Child controls are automatically disposed when their parent form is disposed
 # We only need to dispose the tooltip (not parented) and the form itself
 try {
-    if ($null -ne $tooltip) { $tooltip.Dispose() }
-    if ($null -ne $script:MainForm) { $script:MainForm.Dispose() }
+    if ($null -ne $tooltip -and -not $tooltip.IsDisposed) { $tooltip.Dispose() }
+    if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed) { $script:MainForm.Dispose() }
 } catch {
     # Silently ignore disposal errors during cleanup
 }
