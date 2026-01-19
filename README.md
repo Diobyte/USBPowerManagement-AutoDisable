@@ -36,7 +36,18 @@ This script automatically disables all USB power-saving features across your sys
 
 ## 🚀 Quick Start
 
-### Option 1: Double-Click (Easiest)
+### Option 1: GUI Version (Recommended)
+
+1. Download or clone this repository
+2. Double-click `Run-GUI.bat` (or `USBPowerManagement-GUI.exe` if available)
+3. Accept the UAC prompt for administrator privileges
+4. View your USB devices and their power management status
+5. Click **"Disable Power Management"** button
+6. Restart your computer when prompted
+
+![GUI Screenshot](docs/gui-screenshot.png)
+
+### Option 2: Double-Click (Command Line)
 
 1. Download or clone this repository
 2. Double-click `Run-DisableUSBPowerManagement.bat`
@@ -44,7 +55,7 @@ This script automatically disables all USB power-saving features across your sys
 4. Wait for the script to complete
 5. Restart your computer when prompted
 
-### Option 2: PowerShell Direct
+### Option 3: PowerShell Direct
 
 1. Open PowerShell as Administrator
 2. Navigate to the script directory:
@@ -56,7 +67,7 @@ This script automatically disables all USB power-saving features across your sys
    .\Disable-USBPowerManagement.ps1
    ```
 
-### Option 3: One-Line Command
+### Option 4: One-Line Command
 
 Run in an elevated PowerShell:
 ```powershell
@@ -93,8 +104,12 @@ The script supports several parameters for advanced use cases:
 
 | File | Description |
 |------|-------------|
-| `Disable-USBPowerManagement.ps1` | Main PowerShell script |
-| `Run-DisableUSBPowerManagement.bat` | Easy launcher with auto-elevation |
+| `Disable-USBPowerManagement.ps1` | Main PowerShell script (command line) |
+| `USBPowerManagement-GUI.ps1` | GUI version PowerShell script |
+| `USBPowerManagement-GUI.exe` | Compiled GUI executable (after build) |
+| `Run-DisableUSBPowerManagement.bat` | Command line launcher with auto-elevation |
+| `Run-GUI.bat` | GUI launcher with auto-elevation |
+| `Build-GUI-EXE.bat` | Script to compile GUI to standalone EXE |
 | `README.md` | This documentation file |
 | `LICENSE` | MIT License |
 | `CHANGELOG.md` | Version history |

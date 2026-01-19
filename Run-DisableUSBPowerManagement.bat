@@ -4,7 +4,7 @@ chcp 65001 >nul 2>&1
 :: ============================================================
 :: USB Power Management Disabler - Easy Launcher
 :: Double-click this file to run the script as Administrator
-:: Version: 1.2.0
+:: Version: 1.3.0
 :: Author: Diobyte
 :: Repository: https://github.com/Diobyte/USBPowerManagement-AutoDisable
 :: 

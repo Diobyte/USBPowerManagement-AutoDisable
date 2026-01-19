@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-01-19
+
+### Added
+- **GUI Version** (`USBPowerManagement-GUI.ps1`) with modern Windows Forms interface
+- Standalone EXE compilation support via PS2EXE
+- `Build-GUI-EXE.bat` script to compile GUI to standalone executable
+- `Run-GUI.bat` launcher for GUI version
+- Visual device list showing USB devices and their power management status
+- Color-coded device status (green = disabled, red = enabled)
+- Progress bar for operation tracking
+- Activity log with timestamped, color-coded messages
+- Click-to-elevate admin prompt in GUI
+- Restart prompt dialog after completion
+
+### Changed
+- Updated README with GUI instructions and new file descriptions
+- Reorganized Quick Start section to feature GUI as recommended option
+
 ## [1.2.0] - 2026-01-19
 
 ### Added
@@ -70,11 +88,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.3.0 | 2026-01-19 | GUI version with EXE compilation support |
 | 1.2.0 | 2026-01-19 | Advanced parameters and improved code quality |
 | 1.1.0 | 2026-01-19 | Enhanced compatibility and features |
 | 1.0.0 | 2026-01-15 | Initial release |
 
 ## Upgrade Notes
+
+### Upgrading to 1.3.0
+
+No action required. The GUI version is a new addition. You can use either:
+- `Run-GUI.bat` or `USBPowerManagement-GUI.exe` for the graphical interface
+- `Run-DisableUSBPowerManagement.bat` or the PowerShell script for command line
 
 ### Upgrading to 1.2.0
 
@@ -88,7 +113,7 @@ No action required. Simply replace the old script files with the new ones. The s
 
 ### Planned for Future Releases
 
-- [ ] GUI version for easier use
+- [x] ~~GUI version for easier use~~ ✅ Added in v1.3.0
 - [ ] Undo/restore functionality
 - [ ] Per-device selective configuration
 - [ ] Scheduled task integration

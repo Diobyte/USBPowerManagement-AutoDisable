@@ -29,7 +29,7 @@
 .NOTES
     Author: Diobyte
     Requires: Administrator privileges
-    Version: 1.2.0
+    Version: 1.3.0
     Date: 2026-01-19
     Compatibility: Windows 7/8/8.1/10/11, PowerShell 3.0+
     License: MIT
@@ -311,15 +311,14 @@ function Disable-USBDevicePowerManagement {
             }
             
             if (-not $deviceKeyFound) {
-                # Try direct path
+                # Create Device Parameters key if it doesn't exist
                 $directPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$deviceId"
-                $subKeys = Get-ChildItem -Path $directPath -ErrorAction SilentlyContinue
+                $subKeysAlt = Get-ChildItem -Path $directPath -ErrorAction SilentlyContinue
                 
-                foreach ($subKey in $subKeys) {
+                foreach ($subKey in $subKeysAlt) {
                     $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
                     
                     try {
-                        # Create Device Parameters key if it doesn't exist
                         if (-not (Test-Path $deviceParamsPath)) {
                             New-Item -Path $deviceParamsPath -Force -ErrorAction SilentlyContinue | Out-Null
                         }
@@ -330,7 +329,7 @@ function Disable-USBDevicePowerManagement {
                             Set-ItemProperty -Path $deviceParamsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
                             
                             $devicesModified++
-                            Write-Status "  Modified registry for: $deviceName" "Success"
+                            Write-Status "  Created and modified registry for: $deviceName" "Success"
                         }
                     }
                     catch {
