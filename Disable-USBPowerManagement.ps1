@@ -11,6 +11,21 @@
     
     Compatible with Windows 7, 8, 8.1, 10, and 11.
 
+.PARAMETER ReportOnly
+    Generates a report of USB device power management status without making any changes.
+
+.PARAMETER NoRestartPrompt
+    Skips the restart confirmation prompt at the end of execution.
+
+.PARAMETER EnableLogging
+    Enables transcript logging to a timestamped file in the script directory.
+
+.PARAMETER Restore
+    Restores USB power management settings to Windows defaults (re-enables power saving).
+
+.PARAMETER ExportReport
+    Exports the USB device report to a file. Supported formats: .csv, .json, .txt
+
 .EXAMPLE
     .\Disable-USBPowerManagement.ps1
     Runs the script and disables all USB power management features.
@@ -23,13 +38,21 @@
     .\Disable-USBPowerManagement.ps1 -EnableLogging -NoRestartPrompt
     Runs with logging enabled and skips the restart prompt (useful for automation).
 
+.EXAMPLE
+    .\Disable-USBPowerManagement.ps1 -Restore
+    Restores USB power management to Windows default settings.
+
+.EXAMPLE
+    .\Disable-USBPowerManagement.ps1 -ReportOnly -ExportReport "C:\Reports\usb-report.csv"
+    Generates a report and exports it to a CSV file.
+
 .OUTPUTS
     None. This script does not return any objects but outputs status messages to the console.
 
 .NOTES
     Author: Diobyte
     Requires: Administrator privileges
-    Version: 1.3.0
+    Version: 1.4.0
     Date: 2026-01-19
     Compatibility: Windows 7/8/8.1/10/11, PowerShell 3.0+
     License: MIT
@@ -39,16 +62,31 @@
 #Requires -RunAsAdministrator
 #Requires -Version 3.0
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Disable')]
 param(
-    [Parameter(HelpMessage = "Generate report only without making changes")]
+    [Parameter(ParameterSetName = 'Disable', HelpMessage = "Generate report only without making changes")]
+    [Parameter(ParameterSetName = 'Report')]
     [switch]$ReportOnly,
     
-    [Parameter(HelpMessage = "Skip the restart prompt at the end")]
+    [Parameter(ParameterSetName = 'Disable', HelpMessage = "Skip the restart prompt at the end")]
+    [Parameter(ParameterSetName = 'Restore')]
     [switch]$NoRestartPrompt,
     
-    [Parameter(HelpMessage = "Enable transcript logging to file")]
-    [switch]$EnableLogging
+    [Parameter(ParameterSetName = 'Disable', HelpMessage = "Enable transcript logging to file")]
+    [Parameter(ParameterSetName = 'Restore')]
+    [Parameter(ParameterSetName = 'Report')]
+    [switch]$EnableLogging,
+    
+    [Parameter(ParameterSetName = 'Restore', HelpMessage = "Restore USB power management settings to Windows defaults")]
+    [switch]$Restore,
+    
+    [Parameter(HelpMessage = "Export report to file (CSV, JSON, or TXT)")]
+    [ValidateScript({
+        $ext = [System.IO.Path]::GetExtension($_).ToLower()
+        if ($ext -in @('.csv', '.json', '.txt')) { $true }
+        else { throw "ExportReport must be a .csv, .json, or .txt file" }
+    })]
+    [string]$ExportReport
 )
 
 # Set strict mode for better error detection
@@ -81,6 +119,7 @@ if ($EnableLogging) {
 }
 
 # Function to write colored output with proper formatting
+# Uses Write-Information with tags for PowerShell 5.0+ compatibility
 function Write-Status {
     [CmdletBinding()]
     param(
@@ -96,6 +135,13 @@ function Write-Status {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $formattedMessage = "[$timestamp] [$($Type.ToUpper())] $Message"
     
+    # Use Write-Information with tags for PowerShell 5.0+ (allows filtering via -InformationAction)
+    if ($PSVersionTable.PSVersion.Major -ge 5) {
+        $tags = @("USBPowerManagement", $Type)
+        Write-Information -MessageData $formattedMessage -Tags $tags
+    }
+    
+    # Always output to host with color for visual feedback
     switch ($Type) {
         "Success" { Write-Host $formattedMessage -ForegroundColor Green }
         "Error"   { Write-Host $formattedMessage -ForegroundColor Red }
@@ -162,7 +208,7 @@ function Disable-USBSelectiveSuspend {
         # Get all power plans
         $powerPlans = & $powercfgPath /list 2>&1
         
-        if ($LASTEXITCODE -ne 0) {
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($powerPlans)) {
             Write-Status "Failed to retrieve power plans" "Warning"
             return
         }
@@ -266,9 +312,11 @@ function Disable-USBDevicePowerManagement {
             return
         }
         
+        $processedCount = 0
         foreach ($device in $allDevices) {
+            $processedCount++
             $deviceId = $device.PNPDeviceID
-            $deviceName = $device.Name
+            $deviceName = if ([string]::IsNullOrEmpty($device.Name)) { "Unknown Device" } else { $device.Name }
             
             if ([string]::IsNullOrEmpty($deviceId)) {
                 continue
@@ -550,12 +598,126 @@ function Set-USBServicesConfiguration {
     }
 }
 
-# Function to generate report of USB devices and their power status
-function Get-USBPowerReport {
+# Function to restore USB power management to Windows defaults
+function Enable-USBPowerManagement {
     [CmdletBinding()]
     param()
     
+    Write-Status "Restoring USB power management to Windows defaults..." "Info"
+    
+    $devicesRestored = 0
+    
+    try {
+        # Restore USB Selective Suspend in power plans
+        Write-Status "Enabling USB Selective Suspend in power plans..." "Info"
+        
+        $powercfgPath = Join-Path $env:SystemRoot "System32\powercfg.exe"
+        if (Test-Path -LiteralPath $powercfgPath) {
+            $powerPlans = & $powercfgPath /list 2>&1
+            $planGuids = [regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
+                         ForEach-Object { $_.Groups[1].Value } | 
+                         Select-Object -Unique
+            
+            $usbSettingsGuid = "2a737441-1930-4402-8d77-b2bebba308a3"
+            $usbSelectiveSuspendGuid = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
+            
+            foreach ($planGuid in $planGuids) {
+                # Enable USB selective suspend (1 = Enabled)
+                $null = & $powercfgPath /setacvalueindex $planGuid $usbSettingsGuid $usbSelectiveSuspendGuid 1 2>&1
+                $null = & $powercfgPath /setdcvalueindex $planGuid $usbSettingsGuid $usbSelectiveSuspendGuid 1 2>&1
+            }
+            Write-Status "USB Selective Suspend enabled in all power plans" "Success"
+        }
+        
+        # Remove/restore registry settings for USB devices
+        Write-Status "Restoring USB device registry settings..." "Info"
+        
+        $usbEnumPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\USB"
+        if (Test-Path $usbEnumPath) {
+            $usbDevices = Get-ChildItem -Path $usbEnumPath -Recurse -ErrorAction SilentlyContinue
+            
+            foreach ($item in $usbDevices) {
+                if ($item.PSChildName -eq "Device Parameters") {
+                    try {
+                        # Remove our custom settings (restore to Windows default behavior)
+                        Remove-ItemProperty -Path $item.PSPath -Name "EnhancedPowerManagementEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -Path $item.PSPath -Name "DeviceSelectiveSuspended" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendSupported" -Force -ErrorAction SilentlyContinue
+                        $devicesRestored++
+                    }
+                    catch {
+                        # Continue silently
+                    }
+                }
+            }
+        }
+        
+        # Restore USBSTOR settings
+        $usbStorPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR"
+        if (Test-Path $usbStorPath) {
+            $usbStorDevices = Get-ChildItem -Path $usbStorPath -Recurse -ErrorAction SilentlyContinue
+            
+            foreach ($item in $usbStorDevices) {
+                if ($item.PSChildName -eq "Device Parameters") {
+                    try {
+                        Remove-ItemProperty -Path $item.PSPath -Name "EnhancedPowerManagementEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Force -ErrorAction SilentlyContinue
+                        $devicesRestored++
+                    }
+                    catch {
+                        # Continue silently
+                    }
+                }
+            }
+        }
+        
+        # Remove service configuration
+        Write-Status "Restoring USB service settings..." "Info"
+        
+        $usbServices = @(
+            "HKLM:\SYSTEM\CurrentControlSet\Services\USB",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub3",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\USBXHCI",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\usbehci",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\usbuhci",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\usbohci",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\usbccgp",
+            "HKLM:\SYSTEM\CurrentControlSet\Services\USBSTOR"
+        )
+        
+        foreach ($servicePath in $usbServices) {
+            if (Test-Path $servicePath) {
+                $paramsPath = "$servicePath\Parameters"
+                if (Test-Path $paramsPath) {
+                    Remove-ItemProperty -Path $paramsPath -Name "DisableSelectiveSuspend" -Force -ErrorAction SilentlyContinue
+                }
+                Remove-ItemProperty -Path $servicePath -Name "DisableSelectiveSuspend" -Force -ErrorAction SilentlyContinue
+            }
+        }
+        
+        Write-Status "USB power management restored for $devicesRestored device entries" "Success"
+        Write-Status "USB services restored to defaults" "Success"
+    }
+    catch {
+        Write-Status "Error during restore: $($_.Exception.Message)" "Error"
+    }
+}
+
+# Function to generate report of USB devices and their power status
+function Get-USBPowerReport {
+    [CmdletBinding()]
+    param(
+        [string]$ExportPath
+    )
+    
     Write-Status "Generating USB device power management report..." "Info"
+    
+    # Collect device data for potential export
+    $reportData = @()
     
     Write-Host ("`n" + ("=" * 80)) -ForegroundColor Cyan
     Write-Host "USB DEVICE POWER MANAGEMENT REPORT" -ForegroundColor Cyan
@@ -592,6 +754,16 @@ function Get-USBPowerReport {
         Write-Host "`n$counter. $name" -ForegroundColor White
         Write-Host "   Instance ID: $($device.InstanceId)" -ForegroundColor Gray
         
+        # Initialize device report entry
+        $deviceReport = [PSCustomObject]@{
+            Number = $counter
+            Name = $name
+            InstanceId = $device.InstanceId
+            Status = $device.Status
+            EnhancedPowerManagement = "Not Set"
+            SelectiveSuspend = "Not Set"
+        }
+        
         # Check registry settings
         $instancePath = $device.InstanceId
         $regPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$instancePath"
@@ -605,19 +777,64 @@ function Get-USBPowerReport {
                 
                 if ($enhancedPM) {
                     $pmStatus = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
+                    $deviceReport.EnhancedPowerManagement = $pmStatus
                     Write-Host "   Enhanced Power Management: $pmStatus" -ForegroundColor $(if ($pmStatus -eq "Disabled") { "Green" } else { "Yellow" })
                 }
                 if ($selectiveSuspend) {
                     $ssStatus = if ($selectiveSuspend.SelectiveSuspendEnabled -eq 0) { "Disabled" } else { "Enabled" }
+                    $deviceReport.SelectiveSuspend = $ssStatus
                     Write-Host "   Selective Suspend: $ssStatus" -ForegroundColor $(if ($ssStatus -eq "Disabled") { "Green" } else { "Yellow" })
                 }
             }
         }
         
+        $reportData += $deviceReport
         $counter++
     }
     
     Write-Host ("`n" + ("=" * 80)) -ForegroundColor Cyan
+    
+    # Export report if path specified
+    if ($ExportPath) {
+        try {
+            $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+            
+            switch ($extension) {
+                '.csv' {
+                    $reportData | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
+                    Write-Status "Report exported to CSV: $ExportPath" "Success"
+                }
+                '.json' {
+                    $reportData | ConvertTo-Json -Depth 3 | Out-File -FilePath $ExportPath -Encoding UTF8
+                    Write-Status "Report exported to JSON: $ExportPath" "Success"
+                }
+                '.txt' {
+                    $txtContent = @()
+                    $txtContent += "USB POWER MANAGEMENT REPORT"
+                    $txtContent += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+                    $txtContent += "=" * 80
+                    $txtContent += ""
+                    
+                    foreach ($item in $reportData) {
+                        $txtContent += "$($item.Number). $($item.Name)"
+                        $txtContent += "   Instance ID: $($item.InstanceId)"
+                        $txtContent += "   Status: $($item.Status)"
+                        $txtContent += "   Enhanced Power Management: $($item.EnhancedPowerManagement)"
+                        $txtContent += "   Selective Suspend: $($item.SelectiveSuspend)"
+                        $txtContent += ""
+                    }
+                    
+                    $txtContent | Out-File -FilePath $ExportPath -Encoding UTF8
+                    Write-Status "Report exported to TXT: $ExportPath" "Success"
+                }
+            }
+        }
+        catch {
+            Write-Status "Failed to export report: $($_.Exception.Message)" "Error"
+        }
+    }
+    
+    return $reportData
 }
 
 # Main execution
@@ -630,7 +847,9 @@ function Main {
     
     Write-Host ("`n" + ("=" * 80)) -ForegroundColor Cyan
     Write-Host "USB POWER MANAGEMENT CONFIGURATION SCRIPT" -ForegroundColor Cyan
-    if ($ReportOnly) {
+    if ($Restore) {
+        Write-Host "Mode: RESTORE (Re-enabling USB power management)" -ForegroundColor Yellow
+    } elseif ($ReportOnly) {
         Write-Host "Mode: REPORT ONLY (No changes will be made)" -ForegroundColor Yellow
     } else {
         Write-Host "Disabling 'Allow computer to turn off device to save power'" -ForegroundColor Cyan
@@ -652,44 +871,62 @@ function Main {
     Get-WindowsVersion | Out-Null
     Write-Host ""
     
-    # Step 1: Disable USB Selective Suspend in power plans
-    Disable-USBSelectiveSuspend
-    Write-Host ""
-    
-    # Step 2: Disable power management via registry for all USB devices
-    Disable-USBDevicePowerManagement
-    Write-Host ""
-    
-    # Step 3: Configure USB Hub specific settings
-    Disable-USBHubPowerManagement
-    Write-Host ""
-    
-    # Step 4: Disable power management via PnP/WMI
-    Disable-DevicePowerManagementPnP
-    Write-Host ""
-    
-    # Step 5: Configure USB services
-    Set-USBServicesConfiguration
-    Write-Host ""
-    
-    # Step 6: Generate report
-    Get-USBPowerReport
-    
-    Write-Host ""
-    Write-Host ("=" * 80) -ForegroundColor Green
-    if ($ReportOnly) {
-        Write-Status "USB Power Management report complete!" "Success"
-        Write-Status "No changes were made (report-only mode)." "Info"
-    } else {
-        Write-Status "USB Power Management configuration complete!" "Success"
-        Write-Status "Devices modified: $script:TotalDevicesModified" "Info"
-        if ($script:TotalDevicesFailed -gt 0) {
-            Write-Status "Devices skipped/failed: $script:TotalDevicesFailed" "Warning"
-        }
+    # Handle Restore mode
+    if ($Restore) {
+        Enable-USBPowerManagement
+        Write-Host ""
+        
+        # Generate report
+        Get-USBPowerReport -ExportPath $ExportReport
+        
+        Write-Host ""
+        Write-Host ("=" * 80) -ForegroundColor Green
+        Write-Status "USB Power Management restore complete!" "Success"
+        Write-Status "Windows default power management settings have been restored." "Info"
         Write-Status "A system restart is recommended for all changes to take effect." "Warning"
+        Write-Host ("=" * 80) -ForegroundColor Green
+        Write-Host ""
     }
-    Write-Host ("=" * 80) -ForegroundColor Green
-    Write-Host ""
+    else {
+        # Step 1: Disable USB Selective Suspend in power plans
+        Disable-USBSelectiveSuspend
+        Write-Host ""
+        
+        # Step 2: Disable power management via registry for all USB devices
+        Disable-USBDevicePowerManagement
+        Write-Host ""
+        
+        # Step 3: Configure USB Hub specific settings
+        Disable-USBHubPowerManagement
+        Write-Host ""
+        
+        # Step 4: Disable power management via PnP/WMI
+        Disable-DevicePowerManagementPnP
+        Write-Host ""
+        
+        # Step 5: Configure USB services
+        Set-USBServicesConfiguration
+        Write-Host ""
+        
+        # Step 6: Generate report
+        Get-USBPowerReport -ExportPath $ExportReport
+        
+        Write-Host ""
+        Write-Host ("=" * 80) -ForegroundColor Green
+        if ($ReportOnly) {
+            Write-Status "USB Power Management report complete!" "Success"
+            Write-Status "No changes were made (report-only mode)." "Info"
+        } else {
+            Write-Status "USB Power Management configuration complete!" "Success"
+            Write-Status "Devices modified: $script:TotalDevicesModified" "Info"
+            if ($script:TotalDevicesFailed -gt 0) {
+                Write-Status "Devices skipped/failed: $script:TotalDevicesFailed" "Warning"
+            }
+            Write-Status "A system restart is recommended for all changes to take effect." "Warning"
+        }
+        Write-Host ("=" * 80) -ForegroundColor Green
+        Write-Host ""
+    }
     
     # Prompt for restart (only if changes were made)
     if (-not $ReportOnly -and -not $NoRestartPrompt) {

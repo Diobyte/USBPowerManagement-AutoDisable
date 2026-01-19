@@ -4,6 +4,13 @@ chcp 65001 >nul 2>&1
 :: ============================================================
 :: USB Power Management Disabler - GUI Launcher
 :: Double-click this file to run the GUI version
+:: Version: 1.4.0
+:: Author: Diobyte
+:: Repository: https://github.com/Diobyte/USBPowerManagement-AutoDisable
+::
+:: Exit Codes:
+::   0 - Success
+::   1 - Error (missing files, no admin rights, or failure)
 :: ============================================================
 
 title USB Power Management Disabler GUI

@@ -228,6 +228,22 @@ refactor: consolidate registry modification functions
 
 Before submitting a PR, please test your changes:
 
+### Running Pester Tests
+
+The project includes automated Pester tests. Run them locally before submitting:
+
+```powershell
+# Install Pester if not already installed
+Install-Module -Name Pester -Force -Scope CurrentUser -MinimumVersion 5.0.0
+
+# Run all tests
+Import-Module Pester
+$config = New-PesterConfiguration
+$config.Run.Path = "./tests"
+$config.Output.Verbosity = "Detailed"
+Invoke-Pester -Configuration $config
+```
+
 ### Manual Testing Checklist
 
 - [ ] Script runs without errors on Windows 10

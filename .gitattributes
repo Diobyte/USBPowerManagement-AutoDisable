@@ -1,2 +1,30 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# PowerShell files should use Windows line endings
+*.ps1 text eol=crlf
+*.psd1 text eol=crlf
+*.psm1 text eol=crlf
+
+# Batch files must use Windows line endings
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts should use Unix line endings
+*.sh text eol=lf
+
+# Markdown files
+*.md text eol=lf
+
+# YAML files
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# JSON files
+*.json text eol=lf
+
+# Documentation
+LICENSE text eol=lf
+
+# Binary files
+*.exe binary
+*.dll binary

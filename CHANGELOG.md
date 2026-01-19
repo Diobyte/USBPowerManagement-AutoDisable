@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-01-19
+
+### Added
+- **Restore Feature** - New `-Restore` parameter to revert USB power management to Windows defaults
+- **Export Report** - New `-ExportReport` parameter to save reports to CSV, JSON, or TXT files
+- **GUI Export Log** - Export activity log button in GUI
+- **GUI Restore Button** - Restore defaults button in GUI with amber color styling
+- **GUI Select All/Deselect All** - Buttons to quickly select or deselect all devices in the list
+- **GUI Checkboxes** - Device list now has checkboxes for individual device selection
+- **Tooltips** - Added helpful tooltips to all GUI buttons
+- **Pester Tests** - Comprehensive unit tests for core functionality
+- **GitHub Actions CI/CD** - Automated PowerShell validation and testing workflow
+- **Write-Information Support** - Uses Write-Information with tags for PowerShell 5.0+ compatibility
+- `Enable-USBPowerManagement` function for restoring defaults
+- `Start-RestorePowerManagement` function in GUI
+
+### Changed
+- GUI window slightly taller to accommodate new buttons
+- Device list now shows checkboxes (all checked by default)
+- Improved button layout with better spacing
+- Updated documentation with new parameters and features
+- `Write-Status` function now outputs to both Write-Host and Write-Information streams
+
+### Fixed
+- Button state management during operations (all buttons now properly disabled/enabled)
+
 ## [1.3.0] - 2026-01-19
 
 ### Added
@@ -88,12 +114,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 1.4.0 | 2026-01-19 | Restore feature, export reports, Pester tests, CI/CD |
 | 1.3.0 | 2026-01-19 | GUI version with EXE compilation support |
 | 1.2.0 | 2026-01-19 | Advanced parameters and improved code quality |
 | 1.1.0 | 2026-01-19 | Enhanced compatibility and features |
 | 1.0.0 | 2026-01-15 | Initial release |
 
 ## Upgrade Notes
+
+### Upgrading to 1.4.0
+
+No action required. New features are additive:
+- Use `-Restore` to revert to Windows defaults
+- Use `-ExportReport <path>` to save reports
+- GUI now has "Export Log" and "Restore Defaults" buttons
 
 ### Upgrading to 1.3.0
 
@@ -114,8 +148,9 @@ No action required. Simply replace the old script files with the new ones. The s
 ### Planned for Future Releases
 
 - [x] ~~GUI version for easier use~~ ✅ Added in v1.3.0
-- [ ] Undo/restore functionality
+- [x] ~~Undo/restore functionality~~ ✅ Added in v1.4.0
+- [x] ~~Export/import settings feature~~ ✅ Export added in v1.4.0
 - [ ] Per-device selective configuration
 - [ ] Scheduled task integration
-- [ ] Export/import settings feature
+- [ ] Import settings feature
 - [ ] Multi-language support

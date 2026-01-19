@@ -4,9 +4,10 @@
 
 | Version | Supported |
 | ------- | --------- |
+| 1.4.x   | ✅ Yes    |
 | 1.3.x   | ✅ Yes    |
-| 1.2.x   | ✅ Yes    |
-| 1.1.x   | ⚠️ Limited |
+| 1.2.x   | ⚠️ Limited |
+| 1.1.x   | ❌ No     |
 | 1.0.x   | ❌ No     |
 
 ## Reporting a Vulnerability

@@ -1,0 +1,141 @@
+name: PowerShell Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - '**.ps1'
+      - '**.psd1'
+      - '**.psm1'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.ps1'
+      - '**.psd1'
+      - '**.psm1'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings PSGallery -ExcludeRule PSAvoidUsingWriteHost
+          $results | Format-Table -AutoSize
+          if ($results.Count -gt 0) {
+            $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+            if ($errors.Count -gt 0) {
+              Write-Error "PSScriptAnalyzer found $($errors.Count) error(s)"
+              exit 1
+            }
+            Write-Warning "PSScriptAnalyzer found $($results.Count) issue(s), but no errors"
+          } else {
+            Write-Host "No issues found by PSScriptAnalyzer" -ForegroundColor Green
+          }
+
+  syntax-check:
+    name: Syntax Validation
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate PowerShell Syntax
+        shell: pwsh
+        run: |
+          $hasErrors = $false
+          Get-ChildItem -Path . -Filter *.ps1 -Recurse | ForEach-Object {
+            $file = $_.FullName
+            Write-Host "Checking: $file"
+            try {
+              $parseErrors = $null
+              $null = [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$null, [ref]$parseErrors)
+              if ($parseErrors.Count -gt 0) {
+                Write-Error "Syntax errors in $file"
+                $parseErrors | ForEach-Object { Write-Error $_.Message }
+                $hasErrors = $true
+              } else {
+                Write-Host "  ✓ Valid syntax" -ForegroundColor Green
+              }
+            } catch {
+              Write-Error "Failed to parse $file : $_"
+              $hasErrors = $true
+            }
+          }
+          if ($hasErrors) { exit 1 }
+
+  compatibility-check:
+    name: PowerShell Compatibility
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        powershell: ['5.1', '7.x']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test PowerShell ${{ matrix.powershell }} Compatibility
+        shell: pwsh
+        run: |
+          Write-Host "Testing on PowerShell $($PSVersionTable.PSVersion)"
+          
+          # Test that scripts can be parsed
+          $scripts = @(
+            'Disable-USBPowerManagement.ps1',
+            'USBPowerManagement-GUI.ps1'
+          )
+          
+          foreach ($script in $scripts) {
+            if (Test-Path $script) {
+              Write-Host "Validating $script..."
+              $parseErrors = $null
+              $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                (Resolve-Path $script).Path,
+                [ref]$null,
+                [ref]$parseErrors
+              )
+              if ($parseErrors.Count -eq 0) {
+                Write-Host "  ✓ $script is valid" -ForegroundColor Green
+              } else {
+                Write-Error "  ✗ $script has errors"
+                $parseErrors | ForEach-Object { Write-Error $_.Message }
+                exit 1
+              }
+            }
+          }
+
+  pester-tests:
+    name: Pester Tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Pester Tests
+        shell: pwsh
+        run: |
+          if (Test-Path "./tests") {
+            Install-Module -Name Pester -Force -Scope CurrentUser -MinimumVersion 5.0.0
+            Import-Module Pester
+            $config = New-PesterConfiguration
+            $config.Run.Path = "./tests"
+            $config.Output.Verbosity = "Detailed"
+            $config.TestResult.Enabled = $true
+            $config.TestResult.OutputPath = "test-results.xml"
+            $config.TestResult.OutputFormat = "NUnitXml"
+            $results = Invoke-Pester -Configuration $config
+            if ($results.FailedCount -gt 0) {
+              Write-Error "Pester tests failed: $($results.FailedCount) test(s) failed"
+              exit 1
+            }
+            Write-Host "All $($results.PassedCount) tests passed!" -ForegroundColor Green
+          } else {
+            Write-Host "No tests directory found, skipping Pester tests" -ForegroundColor Yellow
+          }

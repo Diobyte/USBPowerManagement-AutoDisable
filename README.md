@@ -45,7 +45,7 @@ This script automatically disables all USB power-saving features across your sys
 5. Click **"Disable Power Management"** button
 6. Restart your computer when prompted
 
-![GUI Screenshot](docs/gui-screenshot.png)
+> **Note:** Screenshot coming soon. The GUI features a device list, progress bar, activity log, and buttons for Disable, Restore, Refresh, and Export operations.
 
 ### Option 2: Double-Click (Command Line)
 
@@ -90,6 +90,12 @@ The script supports several parameters for advanced use cases:
 # Enable logging to a timestamped file
 .\Disable-USBPowerManagement.ps1 -EnableLogging
 
+# Restore Windows default USB power management settings
+.\Disable-USBPowerManagement.ps1 -Restore
+
+# Export report to CSV, JSON, or TXT
+.\Disable-USBPowerManagement.ps1 -ReportOnly -ExportReport "usb-report.csv"
+
 # Combine parameters
 .\Disable-USBPowerManagement.ps1 -NoRestartPrompt -EnableLogging
 ```
@@ -99,6 +105,8 @@ The script supports several parameters for advanced use cases:
 | `-ReportOnly` | Generate a report of USB power management status without making changes |
 | `-NoRestartPrompt` | Skip the restart prompt at the end of execution |
 | `-EnableLogging` | Save output to a timestamped log file in the script directory |
+| `-Restore` | Restore USB power management to Windows default settings |
+| `-ExportReport <path>` | Export the USB device report to a file (.csv, .json, or .txt) |
 
 ## 📁 Files
 
@@ -110,6 +118,7 @@ The script supports several parameters for advanced use cases:
 | `Run-DisableUSBPowerManagement.bat` | Command line launcher with auto-elevation |
 | `Run-GUI.bat` | GUI launcher with auto-elevation |
 | `Build-GUI-EXE.bat` | Script to compile GUI to standalone EXE |
+| `tests/` | Pester unit tests for script validation |
 | `README.md` | This documentation file |
 | `LICENSE` | MIT License |
 | `CHANGELOG.md` | Version history |
