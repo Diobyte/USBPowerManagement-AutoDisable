@@ -16,23 +16,40 @@ echo   USB Power Management GUI - EXE Builder
 echo ============================================================
 echo.
 
-:: Check for admin (needed for module installation)
->nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
+:: Check for admin using modern method (net session)
+>nul 2>&1 net session
 if '%errorlevel%' NEQ '0' (
     echo Requesting Administrator privileges...
-    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
-    cscript //nologo "%temp%\getadmin.vbs"
-    del /q "%temp%\getadmin.vbs" >nul 2>&1
+    set "_vbsFile=%temp%\getadmin_%RANDOM%%RANDOM%.vbs"
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%_vbsFile%"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%_vbsFile%"
+    cscript //nologo "%_vbsFile%" 2>nul
+    if %errorlevel% NEQ 0 (
+        echo Failed to request elevation. Please run as Administrator manually.
+        pause
+        del /q "%_vbsFile%" >nul 2>&1
+        exit /B 1
+    )
+    del /q "%_vbsFile%" >nul 2>&1
     exit /B 0
 )
 
 pushd "%CD%"
 CD /D "%~dp0"
 
-echo Checking for PS2EXE module...
+echo Checking for NuGet provider and PS2EXE module...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-    "if (-not (Get-Module -ListAvailable -Name ps2exe)) { Write-Host 'Installing PS2EXE module...' -ForegroundColor Yellow; Install-Module -Name ps2exe -Force -Scope CurrentUser } else { Write-Host 'PS2EXE module found.' -ForegroundColor Green }"
+    "$null = [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ^
+    if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) { ^
+        Write-Host 'Installing NuGet provider...' -ForegroundColor Yellow; ^
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null ^
+    }; ^
+    if (-not (Get-Module -ListAvailable -Name ps2exe)) { ^
+        Write-Host 'Installing PS2EXE module...' -ForegroundColor Yellow; ^
+        Install-Module -Name ps2exe -Force -Scope CurrentUser -AllowClobber ^
+    } else { ^
+        Write-Host 'PS2EXE module found.' -ForegroundColor Green ^
+    }"
 
 echo.
 echo Building EXE...
@@ -56,4 +73,5 @@ if exist "%~dp0USBPowerManagement-GUI.exe" (
 )
 
 echo.
+popd
 pause

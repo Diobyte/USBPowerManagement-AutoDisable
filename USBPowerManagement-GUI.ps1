@@ -12,12 +12,31 @@ public static extern IntPtr GetConsoleWindow();
 public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
 '
 $consolePtr = [Console.Window]::GetConsoleWindow()
-[Console.Window]::ShowWindow($consolePtr, 0) | Out-Null
+if ($consolePtr -ne [IntPtr]::Zero) {
+    [Console.Window]::ShowWindow($consolePtr, 0) | Out-Null
+}
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
+
+# Script-level constants for USB power management GUIDs
+$script:USB_SETTINGS_GUID = "2a737441-1930-4402-8d77-b2bebba308a3"
+$script:USB_SELECTIVE_SUSPEND_GUID = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
+
+# USB service registry paths
+$script:USB_SERVICE_PATHS = @(
+    "HKLM:\SYSTEM\CurrentControlSet\Services\USB",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub3",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\USBXHCI",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\usbehci",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\usbuhci",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\usbohci",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\usbccgp",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\USBSTOR"
+)
 
 # Global variables
 $script:DevicesModified = 0
@@ -74,35 +93,62 @@ function Get-USBDevices {
                 $_.PNPDeviceID -like "USBSTOR\*" -or
                 $_.Name -like "*USB*Hub*" -or
                 $_.Name -like "*USB*Controller*" -or
-                $_.Name -like "*USB*Root*"
+                $_.Name -like "*USB*Root*" -or
+                $_.Name -like "*Universal Serial Bus*" -or
+                $_.Name -like "*eXtensible Host Controller*" -or
+                $_.Name -like "*Enhanced Host Controller*" -or
+                $_.Name -like "*Open Host Controller*" -or
+                $_.Name -like "*Universal Host Controller*"
             }
         }
         catch {
             # Fallback to WMI for older systems or if CIM fails
+            Write-Verbose "CIM query failed, falling back to WMI: $($_.Exception.Message)"
             $pnpDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
                 $_.PNPDeviceID -like "USB\*" -or 
                 $_.PNPDeviceID -like "USBSTOR\*" -or
                 $_.Name -like "*USB*Hub*" -or
                 $_.Name -like "*USB*Controller*" -or
-                $_.Name -like "*USB*Root*"
+                $_.Name -like "*USB*Root*" -or
+                $_.Name -like "*Universal Serial Bus*" -or
+                $_.Name -like "*eXtensible Host Controller*" -or
+                $_.Name -like "*Enhanced Host Controller*" -or
+                $_.Name -like "*Open Host Controller*" -or
+                $_.Name -like "*Universal Host Controller*"
             }
         }
         
         foreach ($device in $pnpDevices) {
             if ($null -eq $device.PNPDeviceID) { continue }
             
-            $deviceName = if ([string]::IsNullOrEmpty($device.Name)) { "Unknown USB Device" } else { $device.Name }
+            $deviceName = if (-not [string]::IsNullOrWhiteSpace($device.Name)) { $device.Name } else { "Unknown USB Device" }
             $powerStatus = "Unknown"
             $instancePath = $device.PNPDeviceID
             $regPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$instancePath"
             
-            $subKeys = Get-ChildItem -Path $regPath -ErrorAction SilentlyContinue
-            foreach ($subKey in $subKeys) {
-                $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
-                if (Test-Path $deviceParamsPath) {
-                    $enhancedPM = Get-ItemProperty -Path $deviceParamsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
-                    if ($null -ne $enhancedPM) {
-                        $powerStatus = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
+            # First check Device Parameters directly under the device path
+            $directParamsPath = Join-Path -Path $regPath -ChildPath "Device Parameters"
+            if (Test-Path -LiteralPath $directParamsPath -ErrorAction SilentlyContinue) {
+                $enhancedPM = Get-ItemProperty -Path $directParamsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
+                if ($null -ne $enhancedPM) {
+                    $powerStatus = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
+                }
+            }
+            
+            # Also check subkeys for multi-instance devices (only if not found above)
+            if ($powerStatus -eq "Unknown") {
+                $subKeys = Get-ChildItem -Path $regPath -ErrorAction SilentlyContinue
+                foreach ($subKey in $subKeys) {
+                    # Skip Device Parameters key itself
+                    if ($subKey.PSChildName -eq "Device Parameters") { continue }
+                    
+                    $deviceParamsPath = Join-Path -Path $subKey.PSPath -ChildPath "Device Parameters"
+                    if (Test-Path -LiteralPath $deviceParamsPath -ErrorAction SilentlyContinue) {
+                        $enhancedPM = Get-ItemProperty -Path $deviceParamsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
+                        if ($null -ne $enhancedPM) {
+                            $powerStatus = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
+                            break  # Exit early once we find a value
+                        }
                     }
                 }
             }
@@ -114,7 +160,9 @@ function Get-USBDevices {
                 PowerManagement = $powerStatus
             }
         }
-    } catch { }
+    } catch {
+        Write-Verbose "Device enumeration failed: $($_.Exception.Message)"
+    }
     
     return $devices
 }
@@ -130,15 +178,23 @@ function Disable-USBSelectiveSuspend {
         }
         
         $powerPlans = & $powercfgPath /list 2>&1
+        
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($powerPlans)) {
+            Write-Log "Failed to retrieve power plans" "Warning"
+            return
+        }
+        
         $planGuids = [regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
                      ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
         
-        $usbSettingsGuid = "2a737441-1930-4402-8d77-b2bebba308a3"
-        $usbSelectiveSuspendGuid = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
+        if ($null -eq $planGuids -or @($planGuids).Count -eq 0) {
+            Write-Log "No power plans found" "Warning"
+            return
+        }
         
         foreach ($planGuid in $planGuids) {
-            & $powercfgPath /setacvalueindex $planGuid $usbSettingsGuid $usbSelectiveSuspendGuid 0 2>&1 | Out-Null
-            & $powercfgPath /setdcvalueindex $planGuid $usbSettingsGuid $usbSelectiveSuspendGuid 0 2>&1 | Out-Null
+            & $powercfgPath /setacvalueindex $planGuid $script:USB_SETTINGS_GUID $script:USB_SELECTIVE_SUSPEND_GUID 0 2>&1 | Out-Null
+            & $powercfgPath /setdcvalueindex $planGuid $script:USB_SETTINGS_GUID $script:USB_SELECTIVE_SUSPEND_GUID 0 2>&1 | Out-Null
         }
         
         $activePlan = & $powercfgPath /getactivescheme 2>&1
@@ -169,7 +225,9 @@ function Disable-USBDevicePowerManagement {
                 $_.Name -like "*USB*Root*" -or
                 $_.Name -like "*Universal Serial Bus*" -or
                 $_.Name -like "*eXtensible Host Controller*" -or
-                $_.Name -like "*Enhanced Host Controller*"
+                $_.Name -like "*Enhanced Host Controller*" -or
+                $_.Name -like "*Open Host Controller*" -or
+                $_.Name -like "*Universal Host Controller*"
             }
         }
         catch {
@@ -181,7 +239,9 @@ function Disable-USBDevicePowerManagement {
                 $_.Name -like "*USB*Root*" -or
                 $_.Name -like "*Universal Serial Bus*" -or
                 $_.Name -like "*eXtensible Host Controller*" -or
-                $_.Name -like "*Enhanced Host Controller*"
+                $_.Name -like "*Enhanced Host Controller*" -or
+                $_.Name -like "*Open Host Controller*" -or
+                $_.Name -like "*Universal Host Controller*"
             }
         }
         
@@ -203,9 +263,26 @@ function Disable-USBDevicePowerManagement {
             $enumPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$deviceId"
             
             if (Test-Path $enumPath) {
+                # First, check if Device Parameters exists directly under the device path
+                $directParamsPath = Join-Path -Path $enumPath -ChildPath "Device Parameters"
+                if (Test-Path -LiteralPath $directParamsPath -ErrorAction SilentlyContinue) {
+                    try {
+                        Set-ItemProperty -Path $directParamsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -Path $directParamsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -Path $directParamsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        $script:DevicesModified++
+                    } catch {
+                        $script:DevicesFailed++
+                    }
+                }
+                
+                # Also process subkeys for multi-instance devices
                 $subKeys = Get-ChildItem -Path $enumPath -ErrorAction SilentlyContinue
                 
                 foreach ($subKey in $subKeys) {
+                    # Skip Device Parameters key itself
+                    if ($subKey.PSChildName -eq "Device Parameters") { continue }
+                    
                     $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
                     
                     try {
@@ -255,7 +332,9 @@ function Set-USBHubPowerManagement {
                         Set-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
                         Set-ItemProperty -Path $item.PSPath -Name "DeviceSelectiveSuspended" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
                         Set-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendSupported" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                    } catch { }
+                    } catch {
+                        # Individual device setting may fail due to permissions - continue with others
+                    }
                 }
             }
         }
@@ -290,7 +369,9 @@ function Disable-DevicePowerManagementPnP {
         foreach ($device in $devices) {
             try {
                 $instanceId = $device.InstanceId
-                $friendlyName = if ([string]::IsNullOrEmpty($device.FriendlyName)) { $device.Description } else { $device.FriendlyName }
+                $friendlyName = if (-not [string]::IsNullOrWhiteSpace($device.FriendlyName)) { $device.FriendlyName } 
+                                elseif (-not [string]::IsNullOrWhiteSpace($device.Description)) { $device.Description }
+                                else { "Unknown Device" }
                 
                 # Get power management capabilities (WMI namespace may not exist on all systems)
                 $powerMgmt = $null
@@ -304,12 +385,16 @@ function Disable-DevicePowerManagementPnP {
                 if ($powerMgmt) {
                     foreach ($pm in $powerMgmt) {
                         try {
-                            $pm | Set-CimInstance -Property @{ Enable = $false } -ErrorAction SilentlyContinue
+                            $pm | Set-CimInstance -Property @{ Enable = $false } -ErrorAction Stop
                             $wmiConfigured++
-                        } catch { }
+                        } catch {
+                            # Individual device may fail - continue with others
+                        }
                     }
                 }
-            } catch { }
+            } catch {
+                # Device processing failed - continue with next device
+            }
         }
         
         if ($wmiConfigured -gt 0) {
@@ -328,19 +413,7 @@ function Set-USBServicesConfiguration {
     [System.Windows.Forms.Application]::DoEvents()
     
     try {
-        $usbServices = @(
-            "HKLM:\SYSTEM\CurrentControlSet\Services\USB",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub3",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\USBXHCI",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbehci",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbuhci",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbohci",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbccgp",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\USBSTOR"
-        )
-        
-        foreach ($servicePath in $usbServices) {
+        foreach ($servicePath in $script:USB_SERVICE_PATHS) {
             if (Test-Path $servicePath) {
                 $paramsPath = "$servicePath\Parameters"
                 
@@ -403,12 +476,9 @@ function Enable-USBPowerManagement {
             $planGuids = [regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
                          ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
             
-            $usbSettingsGuid = "2a737441-1930-4402-8d77-b2bebba308a3"
-            $usbSelectiveSuspendGuid = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
-            
             foreach ($planGuid in $planGuids) {
-                & $powercfgPath /setacvalueindex $planGuid $usbSettingsGuid $usbSelectiveSuspendGuid 1 2>&1 | Out-Null
-                & $powercfgPath /setdcvalueindex $planGuid $usbSettingsGuid $usbSelectiveSuspendGuid 1 2>&1 | Out-Null
+                & $powercfgPath /setacvalueindex $planGuid $script:USB_SETTINGS_GUID $script:USB_SELECTIVE_SUSPEND_GUID 1 2>&1 | Out-Null
+                & $powercfgPath /setdcvalueindex $planGuid $script:USB_SETTINGS_GUID $script:USB_SELECTIVE_SUSPEND_GUID 1 2>&1 | Out-Null
             }
             Write-Log "USB Selective Suspend enabled in all power plans" "Success"
         }
@@ -433,7 +503,9 @@ function Enable-USBPowerManagement {
                         Remove-ItemProperty -Path $item.PSPath -Name "DeviceSelectiveSuspended" -Force -ErrorAction SilentlyContinue
                         Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendSupported" -Force -ErrorAction SilentlyContinue
                         $devicesRestored++
-                    } catch { }
+                    } catch {
+                        # Property may not exist - continue with others
+                    }
                 }
             }
         }
@@ -452,7 +524,9 @@ function Enable-USBPowerManagement {
                         Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendEnabled" -Force -ErrorAction SilentlyContinue
                         Remove-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Force -ErrorAction SilentlyContinue
                         $devicesRestored++
-                    } catch { }
+                    } catch {
+                        # Property may not exist - continue with others
+                    }
                 }
             }
         }
@@ -462,19 +536,8 @@ function Enable-USBPowerManagement {
         
         # Remove service configuration
         Write-Log "Restoring USB service settings..." "Info"
-        $usbServices = @(
-            "HKLM:\SYSTEM\CurrentControlSet\Services\USB",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbhub3",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\USBXHCI",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbehci",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbuhci",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbohci",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\usbccgp",
-            "HKLM:\SYSTEM\CurrentControlSet\Services\USBSTOR"
-        )
         
-        foreach ($servicePath in $usbServices) {
+        foreach ($servicePath in $script:USB_SERVICE_PATHS) {
             if (Test-Path $servicePath) {
                 $paramsPath = "$servicePath\Parameters"
                 if (Test-Path $paramsPath) {
@@ -525,6 +588,11 @@ function Start-RestorePowerManagement {
     )
     
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+        Write-Log "Restarting computer in 5 seconds..." "Warning"
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Seconds 2
+        $MainForm.Close()
+        Start-Sleep -Seconds 3
         Restart-Computer -Force
     }
 }
@@ -572,6 +640,11 @@ function Start-DisablePowerManagement {
     )
     
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+        Write-Log "Restarting computer in 5 seconds..." "Warning"
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Seconds 2
+        $MainForm.Close()
+        Start-Sleep -Seconds 3
         Restart-Computer -Force
     }
 }
@@ -593,6 +666,7 @@ function Update-DeviceList {
         if ($null -ne $script:StatusLabel) {
             $script:StatusLabel.Text = "No USB devices found"
         }
+        $script:DeviceListView.EndUpdate()
         return
     }
     
@@ -602,13 +676,15 @@ function Update-DeviceList {
         $item = New-Object System.Windows.Forms.ListViewItem($device.Name)
         $item.SubItems.Add($device.Status) | Out-Null
         $item.SubItems.Add($device.PowerManagement) | Out-Null
-        $item.Checked = $true  # Check all items by default
-        $item.Tag = $device.DeviceID  # Store device ID for operations
+        $item.Tag = $device.DeviceID  # Store device ID for potential future use
         
+        # Color code based on power management status
         if ($device.PowerManagement -eq "Disabled") {
             $item.ForeColor = [System.Drawing.Color]::Green
         } elseif ($device.PowerManagement -eq "Enabled") {
             $item.ForeColor = [System.Drawing.Color]::Red
+        } else {
+            $item.ForeColor = [System.Drawing.Color]::Gray
         }
         
         $script:DeviceListView.Items.Add($item) | Out-Null
@@ -635,12 +711,50 @@ if (-not $isAdmin) {
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-            $psi.Arguments = $MyInvocation.MyCommand.Definition
+            $currentProcess = [System.Diagnostics.Process]::GetCurrentProcess()
+            $exePath = $currentProcess.MainModule.FileName
+            
+            # Check if running as compiled EXE or PowerShell script
+            if ($exePath -like "*powershell*" -or $exePath -like "*pwsh*") {
+                # Running as script - re-launch PowerShell with the script
+                $psi.FileName = $exePath
+                # Get the script path using multiple fallback methods
+                $scriptPath = $null
+                if ($MyInvocation.MyCommand.Path) {
+                    $scriptPath = $MyInvocation.MyCommand.Path
+                } elseif ($PSCommandPath) {
+                    $scriptPath = $PSCommandPath
+                } elseif ($MyInvocation.MyCommand.Definition -and (Test-Path -LiteralPath $MyInvocation.MyCommand.Definition -ErrorAction SilentlyContinue)) {
+                    $scriptPath = $MyInvocation.MyCommand.Definition
+                }
+                
+                if (-not [string]::IsNullOrEmpty($scriptPath) -and (Test-Path -LiteralPath $scriptPath -ErrorAction SilentlyContinue)) {
+                    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+                } else {
+                    # Final fallback - try to find the script in the current directory
+                    $fallbackPath = Join-Path $PWD.Path "USBPowerManagement-GUI.ps1"
+                    if (Test-Path -LiteralPath $fallbackPath) {
+                        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$fallbackPath`""
+                    } else {
+                        throw "Could not determine script path for elevation"
+                    }
+                }
+            } else {
+                # Running as compiled EXE - just re-launch the EXE
+                $psi.FileName = $exePath
+            }
+            
             $psi.Verb = "runas"
             $psi.UseShellExecute = $true
             [System.Diagnostics.Process]::Start($psi) | Out-Null
-        } catch { }
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to elevate privileges: $($_.Exception.Message)",
+                "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        }
     }
     exit
 }
@@ -688,7 +802,7 @@ $MainForm.Controls.Add($AdminLabel)
 
 # Device group
 $DeviceGroup = New-Object System.Windows.Forms.GroupBox
-$DeviceGroup.Text = "USB Devices"
+$DeviceGroup.Text = "USB Devices (Read-Only View)"
 $DeviceGroup.Location = New-Object System.Drawing.Point(20, 110)
 $DeviceGroup.Size = New-Object System.Drawing.Size(745, 220)
 $DeviceGroup.Font = New-Object System.Drawing.Font("Segoe UI", 10)
@@ -696,49 +810,16 @@ $MainForm.Controls.Add($DeviceGroup)
 
 $script:DeviceListView = New-Object System.Windows.Forms.ListView
 $script:DeviceListView.Location = New-Object System.Drawing.Point(10, 25)
-$script:DeviceListView.Size = New-Object System.Drawing.Size(725, 155)
+$script:DeviceListView.Size = New-Object System.Drawing.Size(725, 185)
 $script:DeviceListView.View = "Details"
 $script:DeviceListView.FullRowSelect = $true
 $script:DeviceListView.GridLines = $true
-$script:DeviceListView.CheckBoxes = $true
+$script:DeviceListView.CheckBoxes = $false
 $script:DeviceListView.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $script:DeviceListView.Columns.Add("Device Name", 430) | Out-Null
 $script:DeviceListView.Columns.Add("Status", 100) | Out-Null
 $script:DeviceListView.Columns.Add("Power Mgmt", 150) | Out-Null
 $DeviceGroup.Controls.Add($script:DeviceListView)
-
-# Select All / Deselect All buttons for device list
-$SelectAllButton = New-Object System.Windows.Forms.Button
-$SelectAllButton.Text = "Select All"
-$SelectAllButton.Location = New-Object System.Drawing.Point(10, 185)
-$SelectAllButton.Size = New-Object System.Drawing.Size(80, 25)
-$SelectAllButton.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$SelectAllButton.Add_Click({
-    foreach ($item in $script:DeviceListView.Items) {
-        $item.Checked = $true
-    }
-})
-$DeviceGroup.Controls.Add($SelectAllButton)
-
-$DeselectAllButton = New-Object System.Windows.Forms.Button
-$DeselectAllButton.Text = "Deselect All"
-$DeselectAllButton.Location = New-Object System.Drawing.Point(95, 185)
-$DeselectAllButton.Size = New-Object System.Drawing.Size(80, 25)
-$DeselectAllButton.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$DeselectAllButton.Add_Click({
-    foreach ($item in $script:DeviceListView.Items) {
-        $item.Checked = $false
-    }
-})
-$DeviceGroup.Controls.Add($DeselectAllButton)
-
-$SelectionInfoLabel = New-Object System.Windows.Forms.Label
-$SelectionInfoLabel.Text = "Check devices to include in operations"
-$SelectionInfoLabel.Location = New-Object System.Drawing.Point(185, 188)
-$SelectionInfoLabel.Size = New-Object System.Drawing.Size(300, 20)
-$SelectionInfoLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-$SelectionInfoLabel.ForeColor = [System.Drawing.Color]::Gray
-$DeviceGroup.Controls.Add($SelectionInfoLabel)
 
 # Progress bar
 $script:ProgressBar = New-Object System.Windows.Forms.ProgressBar
@@ -814,17 +895,18 @@ $script:DisableButton.FlatStyle = "Flat"
 $script:DisableButton.Add_Click({ Start-DisablePowerManagement })
 $ButtonPanel.Controls.Add($script:DisableButton)
 
-# Add tooltip for restore button
+# Add tooltips
 $tooltip = New-Object System.Windows.Forms.ToolTip
 $tooltip.SetToolTip($script:RestoreButton, "Restore Windows default USB power management settings")
-$tooltip.SetToolTip($script:DisableButton, "Disable power management to prevent USB disconnections")
+$tooltip.SetToolTip($script:DisableButton, "Disable power management for all USB devices to prevent disconnections")
 $tooltip.SetToolTip($script:ExportLogButton, "Save the activity log to a file")
-$tooltip.SetToolTip($SelectAllButton, "Select all devices in the list")
-$tooltip.SetToolTip($DeselectAllButton, "Deselect all devices in the list")
 $tooltip.SetToolTip($script:RefreshButton, "Refresh the USB device list")
 
 # Load devices
 Update-DeviceList
 
-# Show form
+# Show form and run application loop
 [System.Windows.Forms.Application]::Run($MainForm)
+
+# Clean up resources when form closes
+$MainForm.Dispose()

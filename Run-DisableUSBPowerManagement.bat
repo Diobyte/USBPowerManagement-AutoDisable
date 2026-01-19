@@ -15,8 +15,8 @@ chcp 65001 >nul 2>&1
 
 title USB Power Management Disabler
 
-:: Check for admin rights and self-elevate if needed
->nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
+:: Check for admin rights using modern method (net session)
+>nul 2>&1 net session
 
 if '%errorlevel%' NEQ '0' (
     echo Requesting Administrator privileges...
@@ -24,10 +24,17 @@ if '%errorlevel%' NEQ '0' (
 ) else ( goto gotAdmin )
 
 :UACPrompt
-    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
-    cscript //nologo "%temp%\getadmin.vbs"
-    del /q "%temp%\getadmin.vbs" >nul 2>&1
+    set "_vbsFile=%temp%\getadmin_%RANDOM%%RANDOM%.vbs"
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%_vbsFile%"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%_vbsFile%"
+    cscript //nologo "%_vbsFile%" 2>nul
+    if %errorlevel% NEQ 0 (
+        echo Failed to request elevation. Please run as Administrator manually.
+        pause
+        del /q "%_vbsFile%" >nul 2>&1
+        exit /B 1
+    )
+    del /q "%_vbsFile%" >nul 2>&1
     exit /B 0
 
 :gotAdmin
@@ -43,6 +50,7 @@ if not exist "%~dp0Disable-USBPowerManagement.ps1" (
     echo ============================================================
     echo.
     pause
+    popd
     exit /B 1
 )
 
@@ -56,6 +64,7 @@ if %errorlevel% NEQ 0 (
     echo ============================================================
     echo.
     pause
+    popd
     exit /B 1
 )
 
@@ -85,4 +94,5 @@ if %SCRIPT_EXIT_CODE% EQU 0 (
     echo ============================================================
 )
 pause >nul
+popd
 exit /B %SCRIPT_EXIT_CODE%

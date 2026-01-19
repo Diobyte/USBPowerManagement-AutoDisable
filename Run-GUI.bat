@@ -15,8 +15,8 @@ chcp 65001 >nul 2>&1
 
 title USB Power Management Disabler GUI
 
-:: Check for admin rights and self-elevate if needed
->nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
+:: Check for admin rights using modern method (net session)
+>nul 2>&1 net session
 
 if '%errorlevel%' NEQ '0' (
     echo Requesting Administrator privileges...
@@ -24,10 +24,17 @@ if '%errorlevel%' NEQ '0' (
 ) else ( goto gotAdmin )
 
 :UACPrompt
-    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
-    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
-    cscript //nologo "%temp%\getadmin.vbs"
-    del /q "%temp%\getadmin.vbs" >nul 2>&1
+    set "_vbsFile=%temp%\getadmin_%RANDOM%%RANDOM%.vbs"
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%_vbsFile%"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%_vbsFile%"
+    cscript //nologo "%_vbsFile%" 2>nul
+    if %errorlevel% NEQ 0 (
+        echo Failed to request elevation. Please run as Administrator manually.
+        pause
+        del /q "%_vbsFile%" >nul 2>&1
+        exit /B 1
+    )
+    del /q "%_vbsFile%" >nul 2>&1
     exit /B 0
 
 :gotAdmin
@@ -37,12 +44,14 @@ if '%errorlevel%' NEQ '0' (
 :: Check if EXE version exists, use it preferentially
 if exist "%~dp0USBPowerManagement-GUI.exe" (
     start "" "%~dp0USBPowerManagement-GUI.exe"
+    popd
     exit /B 0
 )
 
 :: Fall back to PowerShell script
 if exist "%~dp0USBPowerManagement-GUI.ps1" (
     powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0USBPowerManagement-GUI.ps1"
+    popd
     exit /B 0
 )
 
@@ -54,4 +63,5 @@ echo   Please ensure USBPowerManagement-GUI.ps1 or .exe exists.
 echo ============================================================
 echo.
 pause
+popd
 exit /B 1
