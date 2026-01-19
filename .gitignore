@@ -1,0 +1,73 @@
+# Windows PowerShell Project .gitignore
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Windows shortcuts
+*.lnk
+
+# PowerShell specific
+*.ps1xml
+*.psd1
+*.psm1.bak
+
+# Module dependencies (if any)
+Modules/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+.~*
+
+# IDE and Editor files
+.vscode/
+*.code-workspace
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio
+.vs/
+*.ncb
+*.aps
+*.cachefile
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Test output
+TestResults/
+test-results/
+
+# Build output
+dist/
+build/
+output/
+
+# Package management
+packages/
