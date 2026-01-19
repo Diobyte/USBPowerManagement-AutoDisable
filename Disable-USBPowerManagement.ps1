@@ -169,6 +169,9 @@ $script:ReportOnly = $false
 $script:osVersion = [System.Environment]::OSVersion.Version
 if ($script:osVersion.Major -lt 6 -or ($script:osVersion.Major -eq 6 -and $script:osVersion.Minor -lt 1)) {
     Write-Host "This script requires Windows 7 or later (Windows Vista and earlier are not supported)." -ForegroundColor Red
+    if ($EnableLogging) {
+        try { Stop-Transcript -ErrorAction SilentlyContinue } catch { }
+    }
     exit 1
 }
 
@@ -286,9 +289,9 @@ function Disable-USBSelectiveSuspend {
         }
         
         # Extract GUIDs of all power plans
-        $planGuids = [regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
+        $planGuids = @([regex]::Matches($powerPlans, '([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})') | 
                      ForEach-Object { $_.Groups[1].Value } | 
-                     Select-Object -Unique
+                     Select-Object -Unique)
         
         if ($planGuids.Count -eq 0) {
             Write-Status "No power plans found" "Warning"
@@ -319,6 +322,39 @@ function Disable-USBSelectiveSuspend {
     }
     catch {
         Write-Status "Failed to disable USB Selective Suspend: $($_.Exception.Message)" "Error"
+    }
+}
+
+# Helper function to set power management properties on a device registry path
+function Set-DevicePowerManagementParams {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ParamsPath,
+        [Parameter(Mandatory = $true)]
+        [string]$DeviceDisplayName
+    )
+    
+    if (-not $PSCmdlet.ShouldProcess($ParamsPath, "Set power management properties for $DeviceDisplayName")) {
+        return $false
+    }
+    
+    try {
+        # Create Device Parameters key if it doesn't exist
+        if (-not (Test-Path -LiteralPath $ParamsPath -ErrorAction SilentlyContinue)) {
+            New-Item -Path $ParamsPath -Force -ErrorAction Stop | Out-Null
+            Write-Status "  Created Device Parameters key for: $DeviceDisplayName" "Info"
+        }
+        
+        # Set all power management properties to disabled (0)
+        Set-ItemProperty -LiteralPath $ParamsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
+        Set-ItemProperty -LiteralPath $ParamsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
+        Set-ItemProperty -LiteralPath $ParamsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Status "  Failed to modify registry for: $DeviceDisplayName - $($_.Exception.Message)" "Warning"
+        return $false
     }
 }
 
@@ -383,32 +419,10 @@ function Disable-USBDevicePowerManagement {
             
             $deviceModified = $false
             
-            # Helper function to set power management properties
-            $setDeviceParams = {
-                param($paramsPath, $deviceDisplayName)
-                try {
-                    # Create Device Parameters key if it doesn't exist
-                    if (-not (Test-Path -LiteralPath $paramsPath -ErrorAction SilentlyContinue)) {
-                        New-Item -Path $paramsPath -Force -ErrorAction Stop | Out-Null
-                        Write-Status "  Created Device Parameters key for: $deviceDisplayName" "Info"
-                    }
-                    
-                    # Set all power management properties to disabled (0)
-                    Set-ItemProperty -LiteralPath $paramsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
-                    Set-ItemProperty -LiteralPath $paramsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
-                    Set-ItemProperty -LiteralPath $paramsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction Stop
-                    return $true
-                }
-                catch {
-                    Write-Status "  Failed to modify registry for: $deviceDisplayName - $($_.Exception.Message)" "Warning"
-                    return $false
-                }
-            }
-            
             # First, check if Device Parameters exists directly under the device path
             $directParamsPath = Join-Path -Path $enumPath -ChildPath "Device Parameters"
             if (Test-Path -LiteralPath $directParamsPath -ErrorAction SilentlyContinue) {
-                $deviceModified = & $setDeviceParams $directParamsPath $deviceName
+                $deviceModified = Set-DevicePowerManagementParams -ParamsPath $directParamsPath -DeviceDisplayName $deviceName
             }
             
             # Also process subkeys for multi-instance devices
@@ -418,7 +432,7 @@ function Disable-USBDevicePowerManagement {
                 if ($subKey.PSChildName -eq "Device Parameters") { continue }
                 
                 $deviceParamsPath = Join-Path -Path $subKey.PSPath -ChildPath "Device Parameters"
-                if (& $setDeviceParams $deviceParamsPath $deviceName) {
+                if (Set-DevicePowerManagementParams -ParamsPath $deviceParamsPath -DeviceDisplayName $deviceName) {
                     $deviceModified = $true
                 }
             }
@@ -553,7 +567,7 @@ function Disable-USBHubPowerManagement {
                         Set-ItemProperty -LiteralPath $item.PSPath -Name "SelectiveSuspendSupported" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
                     }
                     catch {
-                        # Continue silently
+                        Write-Verbose "Could not modify USB hub settings at: $($item.PSPath) - $($_.Exception.Message)"
                     }
                 }
             }
@@ -575,7 +589,7 @@ function Disable-USBHubPowerManagement {
                         Set-ItemProperty -LiteralPath $item.PSPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
                     }
                     catch {
-                        # Continue silently
+                        Write-Verbose "Could not modify USBSTOR settings at: $($item.PSPath) - $($_.Exception.Message)"
                     }
                 }
             }
@@ -791,12 +805,12 @@ function Get-USBPowerReport {
         $instancePath = $device.InstanceId
         $regPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$instancePath"
         
-        $subKeys = Get-ChildItem -LiteralPath $regPath -ErrorAction SilentlyContinue
-        foreach ($subKey in $subKeys) {
-            $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
-            if (Test-Path -LiteralPath $deviceParamsPath) {
-                $enhancedPM = Get-ItemProperty -LiteralPath $deviceParamsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
-                $selectiveSuspend = Get-ItemProperty -LiteralPath $deviceParamsPath -Name "SelectiveSuspendEnabled" -ErrorAction SilentlyContinue
+        # Helper to read power management properties from a Device Parameters path
+        $readPowerProps = {
+            param($paramsPath)
+            if (Test-Path -LiteralPath $paramsPath -ErrorAction SilentlyContinue) {
+                $enhancedPM = Get-ItemProperty -LiteralPath $paramsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
+                $selectiveSuspend = Get-ItemProperty -LiteralPath $paramsPath -Name "SelectiveSuspendEnabled" -ErrorAction SilentlyContinue
                 
                 if ($enhancedPM) {
                     $pmStatus = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
@@ -807,6 +821,26 @@ function Get-USBPowerReport {
                     $ssStatus = if ($selectiveSuspend.SelectiveSuspendEnabled -eq 0) { "Disabled" } else { "Enabled" }
                     $deviceReport.SelectiveSuspend = $ssStatus
                     Write-Host "   Selective Suspend: $ssStatus" -ForegroundColor $(if ($ssStatus -eq "Disabled") { "Green" } else { "Yellow" })
+                }
+                return ($null -ne $enhancedPM -or $null -ne $selectiveSuspend)
+            }
+            return $false
+        }
+        
+        # First check direct Device Parameters path
+        $directParamsPath = Join-Path -Path $regPath -ChildPath "Device Parameters"
+        $foundSettings = & $readPowerProps $directParamsPath
+        
+        # Also check subkeys for multi-instance devices (only if not found above)
+        if (-not $foundSettings) {
+            $subKeys = Get-ChildItem -LiteralPath $regPath -ErrorAction SilentlyContinue
+            foreach ($subKey in $subKeys) {
+                # Skip Device Parameters key itself
+                if ($subKey.PSChildName -eq "Device Parameters") { continue }
+                
+                $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
+                if (& $readPowerProps $deviceParamsPath) {
+                    break  # Found settings, stop searching
                 }
             }
         }

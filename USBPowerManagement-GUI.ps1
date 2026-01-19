@@ -65,6 +65,15 @@ $script:RestoreButton = $null
 $script:ExportLogButton = $null
 $script:MainForm = $null
 
+# Progress bar phase constants (percentages for each operation phase)
+$script:PROGRESS_SELECTIVE_SUSPEND = 10
+$script:PROGRESS_RESTORE_PHASE2 = 40
+$script:PROGRESS_DEVICE_ENUM = 70
+$script:PROGRESS_HUB_CONFIG = 75
+$script:PROGRESS_WMI_CONFIG = 80
+$script:PROGRESS_SERVICE_CONFIG = 85
+$script:PROGRESS_COMPLETE = 100
+
 function Test-Administrator {
     try {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -227,8 +236,28 @@ function Disable-USBDevicePowerManagement {
         return $false
     }
     
+    # Helper function to set power management properties on a registry path
+    $setDevicePowerParams = {
+        param($paramsPath)
+        try {
+            if (-not (Test-Path -LiteralPath $paramsPath)) {
+                New-Item -Path $paramsPath -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            if (Test-Path -LiteralPath $paramsPath) {
+                Set-ItemProperty -LiteralPath $paramsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                Set-ItemProperty -LiteralPath $paramsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                Set-ItemProperty -LiteralPath $paramsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                return $true
+            }
+            return $false
+        } catch {
+            return $false
+        }
+    }
+    
     try {
         # Try CIM first, fallback to WMI for compatibility
+        $allDevices = $null
         try {
             $allDevices = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object { & $matchesUSBPattern $_ }
         }
@@ -236,14 +265,19 @@ function Disable-USBDevicePowerManagement {
             $allDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { & $matchesUSBPattern $_ }
         }
         
-        $deviceArray = @($allDevices)
-        $totalDevices = [Math]::Max($deviceArray.Count, 1)  # Prevent division by zero with cleaner approach
+        # Ensure we have a valid array even if queries returned null
+        if ($null -eq $allDevices) {
+            $deviceArray = @()
+        } else {
+            $deviceArray = @($allDevices)
+        }
+        $totalDevices = [Math]::Max($deviceArray.Count, 1)  # Prevent division by zero
         $currentDevice = 0
         
         foreach ($device in $deviceArray) {
             $currentDevice++
             if ($null -ne $script:ProgressBar) {
-                $script:ProgressBar.Value = [math]::Min(($currentDevice / $totalDevices) * 70, 70)
+                $script:ProgressBar.Value = [math]::Min(($currentDevice / $totalDevices) * $script:PROGRESS_DEVICE_ENUM, $script:PROGRESS_DEVICE_ENUM)
             }
             [System.Windows.Forms.Application]::DoEvents()
             
@@ -253,16 +287,13 @@ function Disable-USBDevicePowerManagement {
             $enumPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$deviceId"
             
             if (Test-Path -LiteralPath $enumPath) {
+                $deviceModified = $false
+                
                 # First, check if Device Parameters exists directly under the device path
                 $directParamsPath = Join-Path -Path $enumPath -ChildPath "Device Parameters"
                 if (Test-Path -LiteralPath $directParamsPath -ErrorAction SilentlyContinue) {
-                    try {
-                        Set-ItemProperty -LiteralPath $directParamsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -LiteralPath $directParamsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -LiteralPath $directParamsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        $script:DevicesModified++
-                    } catch {
-                        $script:DevicesFailed++
+                    if (& $setDevicePowerParams $directParamsPath) {
+                        $deviceModified = $true
                     }
                 }
                 
@@ -275,21 +306,16 @@ function Disable-USBDevicePowerManagement {
                     
                     $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
                     
-                    try {
-                        if (-not (Test-Path -LiteralPath $deviceParamsPath)) {
-                            New-Item -Path $deviceParamsPath -Force -ErrorAction SilentlyContinue | Out-Null
-                        }
-                        
-                        if (Test-Path -LiteralPath $deviceParamsPath) {
-                            Set-ItemProperty -LiteralPath $deviceParamsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                            Set-ItemProperty -LiteralPath $deviceParamsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                            Set-ItemProperty -LiteralPath $deviceParamsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                            $script:DevicesModified++
-                        }
-                    } catch {
-                        $script:DevicesFailed++
-                        Write-Log "  Failed: $($_.Exception.Message)" "Warning"
+                    if (& $setDevicePowerParams $deviceParamsPath) {
+                        $deviceModified = $true
                     }
+                }
+                
+                # Count device only once regardless of how many paths were modified
+                if ($deviceModified) {
+                    $script:DevicesModified++
+                } else {
+                    $script:DevicesFailed++
                 }
             }
         }
@@ -305,7 +331,7 @@ function Disable-USBDevicePowerManagement {
 
 function Set-USBHubPowerManagement {
     Write-Log "Configuring USB Hub settings..." "Info"
-    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = 75 }
+    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_HUB_CONFIG }
     [System.Windows.Forms.Application]::DoEvents()
     
     try {
@@ -337,7 +363,7 @@ function Set-USBHubPowerManagement {
 
 function Disable-DevicePowerManagementPnP {
     Write-Log "Configuring WMI power management..." "Info"
-    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = 80 }
+    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_WMI_CONFIG }
     [System.Windows.Forms.Application]::DoEvents()
     
     try {
@@ -396,7 +422,7 @@ function Disable-DevicePowerManagementPnP {
 
 function Set-USBServicesConfiguration {
     Write-Log "Configuring USB services..." "Info"
-    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = 85 }
+    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_SERVICE_CONFIG }
     [System.Windows.Forms.Application]::DoEvents()
     
     try {
@@ -456,7 +482,7 @@ function Export-Log {
 
 function Enable-USBPowerManagement {
     Write-Log "Restoring USB power management to Windows defaults..." "Info"
-    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = 10 }
+    if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_SELECTIVE_SUSPEND }
     [System.Windows.Forms.Application]::DoEvents()
     
     try {
@@ -476,7 +502,7 @@ function Enable-USBPowerManagement {
             Write-Log "USB Selective Suspend enabled in all power plans" "Success"
         }
         
-        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = 40 }
+        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_RESTORE_PHASE2 }
         [System.Windows.Forms.Application]::DoEvents()
         
         # Remove registry settings
@@ -503,7 +529,7 @@ function Enable-USBPowerManagement {
             }
         }
         
-        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = 70 }
+        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_DEVICE_ENUM }
         [System.Windows.Forms.Application]::DoEvents()
         
         # Restore USBSTOR
@@ -524,7 +550,7 @@ function Enable-USBPowerManagement {
             }
         }
         
-        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = 85 }
+        if ($null -ne $script:ProgressBar) { $script:ProgressBar.Value = $script:PROGRESS_SERVICE_CONFIG }
         [System.Windows.Forms.Application]::DoEvents()
         
         # Remove service configuration
@@ -560,7 +586,7 @@ function Start-RestorePowerManagement {
     
     Enable-USBPowerManagement
     
-    $script:ProgressBar.Value = 100
+    $script:ProgressBar.Value = $script:PROGRESS_COMPLETE
     Write-Log "" "Info"
     Write-Log "========================================" "Info"
     Write-Log "Restore complete!" "Success"
@@ -611,7 +637,7 @@ function Start-DisablePowerManagement {
     Write-Log "Starting USB Power Management configuration..." "Info"
     Write-Log "Running with Administrator privileges" "Success"
     
-    $script:ProgressBar.Value = 10
+    $script:ProgressBar.Value = $script:PROGRESS_SELECTIVE_SUSPEND
     Disable-USBSelectiveSuspend
     
     Disable-USBDevicePowerManagement
@@ -622,7 +648,7 @@ function Start-DisablePowerManagement {
     
     Set-USBServicesConfiguration
     
-    $script:ProgressBar.Value = 100
+    $script:ProgressBar.Value = $script:PROGRESS_COMPLETE
     Write-Log "" "Info"
     Write-Log "========================================" "Info"
     Write-Log "Configuration complete!" "Success"
@@ -688,8 +714,8 @@ function Update-DeviceList {
         if ($null -eq $device.Name) { continue }
         
         $item = New-Object System.Windows.Forms.ListViewItem($device.Name)
-        $item.SubItems.Add($device.Status) | Out-Null
-        $item.SubItems.Add($device.PowerManagement) | Out-Null
+        [void]$item.SubItems.Add($device.Status)
+        [void]$item.SubItems.Add($device.PowerManagement)
         $item.Tag = $device.DeviceID  # Store device ID for potential future use
         
         # Color code based on power management status
@@ -701,7 +727,7 @@ function Update-DeviceList {
             $item.ForeColor = [System.Drawing.Color]::Gray
         }
         
-        $script:DeviceListView.Items.Add($item) | Out-Null
+        [void]$script:DeviceListView.Items.Add($item)
     }
     
     if ($null -ne $script:StatusLabel) {
@@ -743,14 +769,14 @@ if (-not $isAdmin) {
                 }
                 
                 if (-not [string]::IsNullOrEmpty($scriptPath) -and (Test-Path -LiteralPath $scriptPath -ErrorAction SilentlyContinue)) {
-                    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+                    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
                 } else {
                     # Final fallback - try to find the script in the current directory
                     $fallbackPath = Join-Path $PWD.Path "USBPowerManagement-GUI.ps1"
                     if (Test-Path -LiteralPath $fallbackPath) {
-                        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$fallbackPath`""
+                        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$fallbackPath`""
                     } else {
-                        throw "Could not determine script path for elevation"
+                        throw "Could not determine script path for elevation. Please run the script directly from its folder or use Run-GUI.bat."
                     }
                 }
             } else {
@@ -781,6 +807,7 @@ $script:MainForm.StartPosition = "CenterScreen"
 $script:MainForm.FormBorderStyle = "FixedSingle"
 $script:MainForm.MaximizeBox = $false
 $script:MainForm.BackColor = [System.Drawing.Color]::WhiteSmoke
+$script:MainForm.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 
 # Header
 $HeaderPanel = New-Object System.Windows.Forms.Panel
@@ -830,9 +857,9 @@ $script:DeviceListView.FullRowSelect = $true
 $script:DeviceListView.GridLines = $true
 $script:DeviceListView.CheckBoxes = $false
 $script:DeviceListView.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$script:DeviceListView.Columns.Add("Device Name", 430) | Out-Null
-$script:DeviceListView.Columns.Add("Status", 100) | Out-Null
-$script:DeviceListView.Columns.Add("Power Mgmt", 150) | Out-Null
+[void]$script:DeviceListView.Columns.Add("Device Name", 430)
+[void]$script:DeviceListView.Columns.Add("Status", 100)
+[void]$script:DeviceListView.Columns.Add("Power Mgmt", 150)
 $DeviceGroup.Controls.Add($script:DeviceListView)
 
 # Progress bar
@@ -923,4 +950,11 @@ Update-DeviceList
 [System.Windows.Forms.Application]::Run($script:MainForm)
 
 # Clean up resources when form closes
-$script:MainForm.Dispose()
+# Note: Child controls are automatically disposed when their parent form is disposed
+# We only need to dispose the tooltip (not parented) and the form itself
+try {
+    if ($null -ne $tooltip) { $tooltip.Dispose() }
+    if ($null -ne $script:MainForm) { $script:MainForm.Dispose() }
+} catch {
+    # Silently ignore disposal errors during cleanup
+}
