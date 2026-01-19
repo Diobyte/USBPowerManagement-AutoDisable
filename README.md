@@ -53,8 +53,6 @@ Choose your preferred method:
 
 **Double-click:** `Run-GUI.bat`
 
-Or run the standalone: `USBPowerManagement-GUI.exe`
-
 </td>
 <td width="50%">
 
@@ -188,11 +186,12 @@ The device list shows:
 |------|-------------|
 | 📄 `Disable-USBPowerManagement.ps1` | Main CLI script |
 | 🖥️ `USBPowerManagement-GUI.ps1` | GUI version (PowerShell) |
-| 📦 `USBPowerManagement-GUI.exe` | GUI version (Standalone EXE) |
-| 🚀 `Run-DisableUSBPowerManagement.bat` | CLI launcher (auto-elevates) |
+| � `Run-DisableUSBPowerManagement.bat` | CLI launcher (auto-elevates) |
 | 🚀 `Run-GUI.bat` | GUI launcher (auto-elevates) |
-| 🔨 `Build-GUI-EXE.bat` | Builds the standalone EXE |
+| 🔨 `Build-GUI-EXE.bat` | Builds standalone EXE (optional) |
 | 🧪 `tests/` | Pester unit tests |
+
+> 💡 **Want a standalone EXE?** Right-click `Build-GUI-EXE.bat` → "Run as administrator" to create `USBPowerManagement-GUI.exe`
 
 ---
 
