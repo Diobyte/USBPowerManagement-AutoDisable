@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 :: ============================================================
 :: Build USB Power Management GUI to EXE
 :: Requires PS2EXE module
-:: Version: 1.4.0
+:: Version: 1.4.1
 :: Author: Diobyte
 :: Repository: https://github.com/Diobyte/USBPowerManagement-AutoDisable
 :: ============================================================
@@ -56,7 +56,7 @@ echo Building EXE...
 echo.
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Invoke-PS2EXE -InputFile '%~dp0USBPowerManagement-GUI.ps1' -OutputFile '%~dp0USBPowerManagement-GUI.exe' -NoConsole -RequireAdmin -Title 'USB Power Management Disabler' -Description 'Disable USB power management to prevent device disconnections' -Company 'Diobyte' -Product 'USB Power Management Disabler' -Version '1.4.0.0' -Copyright '(c) 2026 Diobyte'" 
+    "Invoke-PS2EXE -InputFile '%~dp0USBPowerManagement-GUI.ps1' -OutputFile '%~dp0USBPowerManagement-GUI.exe' -NoConsole -RequireAdmin -Title 'USB Power Management Disabler' -Description 'Disable USB power management to prevent device disconnections' -Company 'Diobyte' -Product 'USB Power Management Disabler' -Version '1.4.1.0' -Copyright '(c) 2026 Diobyte'" 
 
 if exist "%~dp0USBPowerManagement-GUI.exe" (
     echo.

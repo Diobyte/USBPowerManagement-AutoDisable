@@ -26,6 +26,13 @@
 .PARAMETER ExportReport
     Exports the USB device report to a file. Supported formats: .csv, .json, .txt
 
+.PARAMETER WhatIf
+    Shows what changes would be made without actually making them.
+    Use this to preview the script's actions before committing changes.
+
+.PARAMETER Confirm
+    Prompts for confirmation before making each change.
+
 .EXAMPLE
     .\Disable-USBPowerManagement.ps1
     Runs the script and disables all USB power management features.
@@ -46,13 +53,17 @@
     .\Disable-USBPowerManagement.ps1 -ReportOnly -ExportReport "C:\Reports\usb-report.csv"
     Generates a report and exports it to a CSV file.
 
+.EXAMPLE
+    .\Disable-USBPowerManagement.ps1 -WhatIf
+    Shows what changes would be made without actually applying them.
+
 .OUTPUTS
     None. This script does not return any objects but outputs status messages to the console.
 
 .NOTES
     Author: Diobyte
     Requires: Administrator privileges
-    Version: 1.4.0
+    Version: 1.4.1
     Date: 2026-01-19
     Compatibility: Windows 7/8/8.1/10/11, PowerShell 3.0+
     License: MIT
@@ -62,7 +73,7 @@
 #Requires -RunAsAdministrator
 #Requires -Version 3.0
 
-[CmdletBinding(DefaultParameterSetName = 'Disable')]
+[CmdletBinding(DefaultParameterSetName = 'Disable', SupportsShouldProcess = $true)]
 param(
     [Parameter(ParameterSetName = 'Disable', HelpMessage = "Generate report only without making changes")]
     [Parameter(ParameterSetName = 'Report')]
@@ -96,6 +107,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
 
 # Script-level constants for USB power management GUIDs
+# USB_SETTINGS_GUID: Power settings subgroup for USB settings in Windows power plans
+# USB_SELECTIVE_SUSPEND_GUID: Setting for USB selective suspend feature (0=Disabled, 1=Enabled)
 $script:USB_SETTINGS_GUID = "2a737441-1930-4402-8d77-b2bebba308a3"
 $script:USB_SELECTIVE_SUSPEND_GUID = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
 
@@ -123,6 +136,29 @@ $script:USB_DEVICE_PATTERNS = @(
     "*Open Host Controller*",
     "*Universal Host Controller*"
 )
+
+# Helper function to test if a device matches USB patterns
+function Test-USBDevice {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Device
+    )
+    
+    # Check by PNPDeviceID prefix
+    if ($Device.PNPDeviceID -like "USB\*" -or $Device.PNPDeviceID -like "USBSTOR\*") {
+        return $true
+    }
+    
+    # Check by device name patterns
+    foreach ($pattern in $script:USB_DEVICE_PATTERNS) {
+        if ($Device.Name -like $pattern) {
+            return $true
+        }
+    }
+    
+    return $false
+}
 
 # Initialize script-level variables
 $script:TotalDevicesModified = 0
@@ -219,13 +255,17 @@ function Get-WindowsVersion {
 
 # Function to disable USB Selective Suspend in all power plans
 function Disable-USBSelectiveSuspend {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param()
     
     Write-Status "Disabling USB Selective Suspend in all power plans..." "Info"
     
     if ($script:ReportOnly) {
         Write-Status "Report-only mode: Skipping power plan modifications" "Info"
+        return
+    }
+    
+    if (-not $PSCmdlet.ShouldProcess("All Power Plans", "Disable USB Selective Suspend")) {
         return
     }
     
@@ -284,13 +324,17 @@ function Disable-USBSelectiveSuspend {
 
 # Function to disable power management for USB devices via registry
 function Disable-USBDevicePowerManagement {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param()
     
     Write-Status "Disabling power management for all USB devices..." "Info"
     
     if ($script:ReportOnly) {
         Write-Status "Report-only mode: Skipping device power management modifications" "Info"
+        return
+    }
+    
+    if (-not $PSCmdlet.ShouldProcess("All USB Devices", "Disable Power Management")) {
         return
     }
     
@@ -301,33 +345,11 @@ function Disable-USBDevicePowerManagement {
         # Get all USB-related devices using multiple methods for robustness
         # Try CIM first (modern), fallback to WMI (legacy) for compatibility
         try {
-            $allDevices = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object {
-                $_.PNPDeviceID -like "USB\*" -or 
-                $_.PNPDeviceID -like "USBSTOR\*" -or
-                $_.Name -like "*USB*Hub*" -or
-                $_.Name -like "*USB*Controller*" -or
-                $_.Name -like "*USB*Root*" -or
-                $_.Name -like "*Universal Serial Bus*" -or
-                $_.Name -like "*eXtensible Host Controller*" -or
-                $_.Name -like "*Enhanced Host Controller*" -or
-                $_.Name -like "*Open Host Controller*" -or
-                $_.Name -like "*Universal Host Controller*"
-            }
+            $allDevices = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop | Where-Object { Test-USBDevice $_ }
         }
         catch {
             # Fallback to WMI for older systems or PowerShell Core without CimCmdlets
-            $allDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
-                $_.PNPDeviceID -like "USB\*" -or 
-                $_.PNPDeviceID -like "USBSTOR\*" -or
-                $_.Name -like "*USB*Hub*" -or
-                $_.Name -like "*USB*Controller*" -or
-                $_.Name -like "*USB*Root*" -or
-                $_.Name -like "*Universal Serial Bus*" -or
-                $_.Name -like "*eXtensible Host Controller*" -or
-                $_.Name -like "*Enhanced Host Controller*" -or
-                $_.Name -like "*Open Host Controller*" -or
-                $_.Name -like "*Universal Host Controller*"
-            }
+            $allDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { Test-USBDevice $_ }
         }
         
         $deviceCount = if ($null -eq $allDevices) { 0 } else { @($allDevices).Count }
@@ -372,9 +394,9 @@ function Disable-USBDevicePowerManagement {
                     }
                     
                     # Set all power management properties to disabled (0)
-                    Set-ItemProperty -Path $paramsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
-                    Set-ItemProperty -Path $paramsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
-                    Set-ItemProperty -Path $paramsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction Stop
+                    Set-ItemProperty -LiteralPath $paramsPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
+                    Set-ItemProperty -LiteralPath $paramsPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction Stop
+                    Set-ItemProperty -LiteralPath $paramsPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction Stop
                     return $true
                 }
                 catch {
@@ -390,7 +412,7 @@ function Disable-USBDevicePowerManagement {
             }
             
             # Also process subkeys for multi-instance devices
-            $subKeys = Get-ChildItem -Path $enumPath -ErrorAction SilentlyContinue
+            $subKeys = Get-ChildItem -LiteralPath $enumPath -ErrorAction SilentlyContinue
             foreach ($subKey in $subKeys) {
                 # Skip if this is not a device instance subkey (e.g., skip "Device Parameters" itself)
                 if ($subKey.PSChildName -eq "Device Parameters") { continue }
@@ -420,13 +442,17 @@ function Disable-USBDevicePowerManagement {
 
 # Function to disable power management using Device Manager properties (PnPUtil method)
 function Disable-DevicePowerManagementPnP {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param()
     
     Write-Status "Disabling power management via PnP device properties..." "Info"
     
     if ($script:ReportOnly) {
         Write-Status "Report-only mode: Skipping PnP power management modifications" "Info"
+        return
+    }
+    
+    if (-not $PSCmdlet.ShouldProcess("USB PnP Devices", "Disable WMI Power Management")) {
         return
     }
     
@@ -495,7 +521,7 @@ function Disable-DevicePowerManagementPnP {
 
 # Function to modify USB hub power management directly
 function Disable-USBHubPowerManagement {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param()
     
     Write-Status "Configuring USB Hub specific power management..." "Info"
@@ -505,22 +531,26 @@ function Disable-USBHubPowerManagement {
         return
     }
     
+    if (-not $PSCmdlet.ShouldProcess("USB Hub Registry Settings", "Disable Power Management")) {
+        return
+    }
+    
     try {
         # Find all USB hubs and root hubs in registry
         $usbEnumPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\USB"
         
-        if (Test-Path $usbEnumPath) {
-            $usbDevices = Get-ChildItem -Path $usbEnumPath -Recurse -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $usbEnumPath) {
+            $usbDevices = Get-ChildItem -LiteralPath $usbEnumPath -Recurse -ErrorAction SilentlyContinue
             
             foreach ($item in $usbDevices) {
                 if ($item.PSChildName -eq "Device Parameters") {
                     try {
                         # Disable all power management options
-                        Set-ItemProperty -Path $item.PSPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $item.PSPath -Name "DeviceSelectiveSuspended" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendSupported" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "DeviceSelectiveSuspended" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "SelectiveSuspendSupported" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
                     }
                     catch {
                         # Continue silently
@@ -534,15 +564,15 @@ function Disable-USBHubPowerManagement {
         # Also process USBSTOR devices
         $usbStorPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR"
         
-        if (Test-Path $usbStorPath) {
-            $usbStorDevices = Get-ChildItem -Path $usbStorPath -Recurse -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $usbStorPath) {
+            $usbStorDevices = Get-ChildItem -LiteralPath $usbStorPath -Recurse -ErrorAction SilentlyContinue
             
             foreach ($item in $usbStorDevices) {
                 if ($item.PSChildName -eq "Device Parameters") {
                     try {
-                        Set-ItemProperty -Path $item.PSPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "EnhancedPowerManagementEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "SelectiveSuspendEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $item.PSPath -Name "AllowIdleIrpInD3" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
                     }
                     catch {
                         # Continue silently
@@ -560,7 +590,7 @@ function Disable-USBHubPowerManagement {
 
 # Function to disable USB power management via services
 function Set-USBServicesConfiguration {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param()
     
     Write-Status "Configuring USB-related service settings..." "Info"
@@ -570,23 +600,27 @@ function Set-USBServicesConfiguration {
         return
     }
     
+    if (-not $PSCmdlet.ShouldProcess("USB Service Registry Settings", "Configure DisableSelectiveSuspend")) {
+        return
+    }
+    
     try {
         foreach ($service in $script:USB_SERVICE_PATHS) {
-            if (Test-Path $service.Path) {
+            if (Test-Path -LiteralPath $service.Path) {
                 $paramsPath = "$($service.Path)\Parameters"
                 
                 # Create Parameters key if it doesn't exist
-                if (-not (Test-Path $paramsPath)) {
+                if (-not (Test-Path -LiteralPath $paramsPath)) {
                     New-Item -Path $paramsPath -Force -ErrorAction SilentlyContinue | Out-Null
                 }
                 
-                if (Test-Path $paramsPath) {
-                    Set-ItemProperty -Path $paramsPath -Name "DisableSelectiveSuspend" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $paramsPath) {
+                    Set-ItemProperty -LiteralPath $paramsPath -Name "DisableSelectiveSuspend" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
                     Write-Status "$($service.Name) service selective suspend disabled" "Success"
                 }
                 
                 # Also set at service root level for some drivers
-                Set-ItemProperty -Path $service.Path -Name "DisableSelectiveSuspend" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+                Set-ItemProperty -LiteralPath $service.Path -Name "DisableSelectiveSuspend" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
             }
         }
     }
@@ -597,10 +631,14 @@ function Set-USBServicesConfiguration {
 
 # Function to restore USB power management to Windows defaults
 function Enable-USBPowerManagement {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param()
     
     Write-Status "Restoring USB power management to Windows defaults..." "Info"
+    
+    if (-not $PSCmdlet.ShouldProcess("USB Power Management Settings", "Restore to Windows Defaults")) {
+        return
+    }
     
     $devicesRestored = 0
     
@@ -627,18 +665,18 @@ function Enable-USBPowerManagement {
         Write-Status "Restoring USB device registry settings..." "Info"
         
         $usbEnumPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\USB"
-        if (Test-Path $usbEnumPath) {
-            $usbDevices = Get-ChildItem -Path $usbEnumPath -Recurse -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $usbEnumPath) {
+            $usbDevices = Get-ChildItem -LiteralPath $usbEnumPath -Recurse -ErrorAction SilentlyContinue
             
             foreach ($item in $usbDevices) {
                 if ($item.PSChildName -eq "Device Parameters") {
                     try {
                         # Remove our custom settings (restore to Windows default behavior)
-                        Remove-ItemProperty -Path $item.PSPath -Name "EnhancedPowerManagementEnabled" -Force -ErrorAction SilentlyContinue
-                        Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendEnabled" -Force -ErrorAction SilentlyContinue
-                        Remove-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Force -ErrorAction SilentlyContinue
-                        Remove-ItemProperty -Path $item.PSPath -Name "DeviceSelectiveSuspended" -Force -ErrorAction SilentlyContinue
-                        Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendSupported" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "EnhancedPowerManagementEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "SelectiveSuspendEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "AllowIdleIrpInD3" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "DeviceSelectiveSuspended" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "SelectiveSuspendSupported" -Force -ErrorAction SilentlyContinue
                         $devicesRestored++
                     }
                     catch {
@@ -650,15 +688,15 @@ function Enable-USBPowerManagement {
         
         # Restore USBSTOR settings
         $usbStorPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR"
-        if (Test-Path $usbStorPath) {
-            $usbStorDevices = Get-ChildItem -Path $usbStorPath -Recurse -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $usbStorPath) {
+            $usbStorDevices = Get-ChildItem -LiteralPath $usbStorPath -Recurse -ErrorAction SilentlyContinue
             
             foreach ($item in $usbStorDevices) {
                 if ($item.PSChildName -eq "Device Parameters") {
                     try {
-                        Remove-ItemProperty -Path $item.PSPath -Name "EnhancedPowerManagementEnabled" -Force -ErrorAction SilentlyContinue
-                        Remove-ItemProperty -Path $item.PSPath -Name "SelectiveSuspendEnabled" -Force -ErrorAction SilentlyContinue
-                        Remove-ItemProperty -Path $item.PSPath -Name "AllowIdleIrpInD3" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "EnhancedPowerManagementEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "SelectiveSuspendEnabled" -Force -ErrorAction SilentlyContinue
+                        Remove-ItemProperty -LiteralPath $item.PSPath -Name "AllowIdleIrpInD3" -Force -ErrorAction SilentlyContinue
                         $devicesRestored++
                     }
                     catch {
@@ -673,12 +711,12 @@ function Enable-USBPowerManagement {
         
         foreach ($service in $script:USB_SERVICE_PATHS) {
             $servicePath = $service.Path
-            if (Test-Path $servicePath) {
+            if (Test-Path -LiteralPath $servicePath) {
                 $paramsPath = "$servicePath\Parameters"
-                if (Test-Path $paramsPath) {
-                    Remove-ItemProperty -Path $paramsPath -Name "DisableSelectiveSuspend" -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $paramsPath) {
+                    Remove-ItemProperty -LiteralPath $paramsPath -Name "DisableSelectiveSuspend" -Force -ErrorAction SilentlyContinue
                 }
-                Remove-ItemProperty -Path $servicePath -Name "DisableSelectiveSuspend" -Force -ErrorAction SilentlyContinue
+                Remove-ItemProperty -LiteralPath $servicePath -Name "DisableSelectiveSuspend" -Force -ErrorAction SilentlyContinue
             }
         }
         
@@ -753,12 +791,12 @@ function Get-USBPowerReport {
         $instancePath = $device.InstanceId
         $regPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$instancePath"
         
-        $subKeys = Get-ChildItem -Path $regPath -ErrorAction SilentlyContinue
+        $subKeys = Get-ChildItem -LiteralPath $regPath -ErrorAction SilentlyContinue
         foreach ($subKey in $subKeys) {
             $deviceParamsPath = Join-Path $subKey.PSPath "Device Parameters"
-            if (Test-Path $deviceParamsPath) {
-                $enhancedPM = Get-ItemProperty -Path $deviceParamsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
-                $selectiveSuspend = Get-ItemProperty -Path $deviceParamsPath -Name "SelectiveSuspendEnabled" -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $deviceParamsPath) {
+                $enhancedPM = Get-ItemProperty -LiteralPath $deviceParamsPath -Name "EnhancedPowerManagementEnabled" -ErrorAction SilentlyContinue
+                $selectiveSuspend = Get-ItemProperty -LiteralPath $deviceParamsPath -Name "SelectiveSuspendEnabled" -ErrorAction SilentlyContinue
                 
                 if ($enhancedPM) {
                     $pmStatus = if ($enhancedPM.EnhancedPowerManagementEnabled -eq 0) { "Disabled" } else { "Enabled" }
@@ -943,7 +981,13 @@ function Main {
                 if ($restart -eq 'Y' -or $restart -eq 'y') {
                     Write-Status "Restarting computer in 10 seconds... Press Ctrl+C to cancel." "Warning"
                     Start-Sleep -Seconds 10
-                    Restart-Computer -Force
+                    try {
+                        Restart-Computer -Force -ErrorAction Stop
+                    }
+                    catch {
+                        Write-Status "Failed to restart computer: $($_.Exception.Message)" "Error"
+                        Write-Status "Please restart your computer manually for all changes to take full effect." "Warning"
+                    }
                 }
                 else {
                     Write-Status "Please remember to restart your computer for all changes to take full effect." "Info"
