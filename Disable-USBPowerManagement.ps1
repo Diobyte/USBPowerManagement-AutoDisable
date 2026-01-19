@@ -73,9 +73,6 @@
 #Requires -RunAsAdministrator
 #Requires -Version 3.0
 
-# Script-level version constant (centralized for easy updates)
-$script:VERSION = "1.4.1"
-
 [CmdletBinding(DefaultParameterSetName = 'Disable', SupportsShouldProcess = $true)]
 param(
     [Parameter(ParameterSetName = 'Disable', HelpMessage = "Generate report only without making changes")]
@@ -102,6 +99,9 @@ param(
     })]
     [string]$ExportReport
 )
+
+# Script-level version constant (centralized for easy updates)
+$script:VERSION = "1.4.1"
 
 # Set strict mode for better error detection
 Set-StrictMode -Version Latest
